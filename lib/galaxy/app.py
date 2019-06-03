@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 
 import logging
+import os
 import signal
 import sys
 import time
@@ -55,6 +56,15 @@ class UniverseApplication(config.ConfiguresGalaxyMixin):
     """Encapsulates the state of a Universe application"""
 
     def __init__(self, **kwargs):
+
+        current_umask = os.umask(0)
+        log.debug("\n\n\n\n\n\n##############################OLD", current_umask, "\n\n\n\n\n\n\n\n")
+        log.warn("\n\n\n\n\n\n##############################OLD", current_umask, "\n\n\n\n\n\n\n\n")
+        os.umask(0)
+        new_mask = os.umask(0)
+        log.debug("\n\n\n\n\n\n##############################NEW", new_mask, "\n\n\n\n\n\n\n\n")
+        log.warn("\n\n\n\n\n\n##############################NEW", new_mask, "\n\n\n\n\n\n\n\n")
+
         if not log.handlers:
             # Paste didn't handle it, so we need a temporary basic log
             # configured.  The handler added here gets dumped and replaced with
