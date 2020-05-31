@@ -1503,6 +1503,8 @@ class DrillDownSelectToolParameter(SelectToolParameter):
         return self.options
 
     def get_legal_values(self, trans, other_values, value):
+        if self.is_dynamic:
+            return None
         def recurse_options(legal_values, options):
             for option in options:
                 legal_values.append(option['value'])
@@ -1525,18 +1527,22 @@ class DrillDownSelectToolParameter(SelectToolParameter):
             if self.optional:
                 return None
             raise ParameterValueError(f"an invalid option ({value!r}) was selected", self.name, value)
-        elif not legal_values:
+        elif not legal_values and not self.is_dynamic:
             raise ParameterValueError("requires a value, but no legal values defined", self.name)
+        if isinstance(value, dict):
+            clicked_node = value.get('last_clicked_node')
+            value = value.get('value')
+        else:
+            clicked_node = None
         if not isinstance(value, list):
             value = [value]
         if len(value) > 1 and not self.multiple:
             raise ParameterValueError("multiple values provided but parameter is not expecting multiple values", self.name)
-        rval = []
-        for val in value:
-            if val not in legal_values:
-                raise ParameterValueError("an invalid option ({!r}) was selected (valid options: {})".format(val, ",".join(legal_values)), self.name, val)
-            rval.append(val)
-        return rval
+        if not self.is_dynamic:
+            for val in value:
+                if val not in legal_values:
+                    raise ParameterValueError("an invalid option ({!r}) was selected (valid options: {})".format(val, ",".join(legal_values)), self.name, val)
+        return {'last_clicked_node': clicked_node, 'value': list(value)}
 
     def to_param_dict_string(self, value, other_values=None):
         other_values = other_values or {}
@@ -1572,6 +1578,8 @@ class DrillDownSelectToolParameter(SelectToolParameter):
                 rval.extend(options)
         if len(rval) > 1 and not self.multiple:
             raise ParameterValueError("multiple values provided but parameter is not expecting multiple values", self.name)
+
+        rval = [str(val) for val in rval]
         rval = self.separator.join(rval)
         if self.tool is None or self.tool.options.sanitize:
             if self.sanitizer:
