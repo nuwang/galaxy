@@ -313,7 +313,7 @@ class UserAPIController(BaseAPIController, UsesTagsMixin, BaseUIController, Uses
                     for data_item in user_extra_prefs:
                         if field in data_item:
                             input['value'] = user_extra_prefs[data_item]
-                extra_pref_inputs.append({'type': 'section', 'title': value['description'], 'name': item, 'expanded': True, 'inputs': value['inputs']})
+                extra_pref_inputs.append({'type': 'section', 'title': value['description'], 'name': item, 'expanded': True, 'inputs': input_fields})
         return extra_pref_inputs
 
     @expose_api
