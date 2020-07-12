@@ -77,22 +77,36 @@ var View = Options.BaseIcons.extend({
                 var $group = $("<div/>");
                 if (has_options) {
                     var header_id = Utils.uid();
-                    var $button = $("<span/>")
-                        .attr('value', level.value)
-                        .data('is_expanded', level.expanded)
-                        .addClass(`button-${header_id}`)
-                        .addClass("ui-drilldown-button fa " + (level.expanded ? "fa-minus-square": "fa-plus-square"));
-                    var $subgroup = $("<div/>").addClass(`subgroup-${header_id}`).addClass("ui-drilldown-subgroup");
-                    $group.append(
-                        $("<div/>")
-                            .append($button)
-                            .append(
-                                self._templateOption({
-                                    label: level.name,
-                                    value: level.value,
-                                })
-                            )
-                    );
+                    if (level.disabled) {
+                        var $subgroup = $("<div/>").addClass(`subgroup-${header_id}`).addClass("ui-drilldown-subgroup");
+                        $group.append(
+                            $("<div/>")
+                                .append(
+                                    self._templateOption({
+                                        label: level.name,
+                                        value: level.value
+                                    })
+                                )
+                        );
+                    }
+                    else {
+                        var $button = $("<span/>")
+                            .attr('value', level.value)
+                            .data('is_expanded', level.expanded)
+                            .addClass(`button-${header_id}`)
+                            .addClass("ui-drilldown-button fa " + (level.expanded ? "fa-minus-square" : "fa-plus-square"));
+                        var $subgroup = $("<div/>").addClass(`subgroup-${header_id}`).addClass("ui-drilldown-subgroup");
+                        $group.append(
+                            $("<div/>")
+                                .append($button)
+                                .append(
+                                    self._templateOption({
+                                        label: level.name,
+                                        value: level.value
+                                    })
+                                )
+                        );
+                    }
                     new_header.push(header_id);
                     iterate($subgroup, level.options, new_header);
                     $group.append($subgroup);
