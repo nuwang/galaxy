@@ -207,9 +207,10 @@ var Base = Backbone.View.extend({
 var BaseIcons = Base.extend({
     _templateOption: function (pair) {
         var id = Utils.uid();
-        return $("<div/>")
-            .addClass("ui-option")
-            .append(
+        var elem = $("<div/>")
+            .addClass("ui-option");
+        if (!pair.disabled) {
+            elem.append(
                 $("<input/>").attr({
                     id: id,
                     type: this.model.get("type"),
@@ -217,8 +218,15 @@ var BaseIcons = Base.extend({
                     value: pair.value,
                 })
             )
-            .append($("<label/>").addClass("ui-options-label").attr("for", id).html(pair.label));
-    },
+        }
+        elem.append(
+                $("<label/>")
+                    .addClass("ui-options-label")
+                    .attr("for", id)
+                    .html(pair.label)
+            );
+        return elem;
+    }
 });
 
 /** Radio button field **/
