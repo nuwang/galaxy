@@ -63,7 +63,7 @@ RUN set -xe; \
 WORKDIR /tmp/ansible
 RUN rm -rf *
 ENV LC_ALL en_US.UTF-8
-RUN git clone --depth 1 $GALAXY_PLAYBOOK_REPO galaxy-docker
+RUN git clone --depth 1 $GALAXY_PLAYBOOK_REPO galaxy-docker --branch fix_tags_temp
 WORKDIR /tmp/ansible/galaxy-docker
 RUN ansible-galaxy install -r requirements.yml -p roles --force-with-deps
 
@@ -74,6 +74,9 @@ COPY . $SERVER_DIR/
 # Stage 2.1 - Build galaxy server
 #======================================================
 FROM stage1 AS server_build
+
+ARG SERVER_DIR
+
 RUN ansible-playbook -i localhost, playbook.yml -v -e galaxy_build_client=False
 
 RUN cat /galaxy/server/lib/galaxy/dependencies/conditional-requirements.txt | grep psycopg2-binary | xargs /galaxy/server/.venv/bin/pip install
@@ -98,10 +101,11 @@ RUN find . -name "node_modules" -type d -prune -exec rm -rf '{}' +
 # Stage 2.2 - Build galaxy client
 #======================================================
 FROM stage1 AS client_build
+ARG SERVER_DIR
+
 RUN ansible-playbook -i localhost, playbook.yml -v --tags "galaxy_build_client"
 
 WORKDIR $SERVER_DIR
-RUN find . -name "node_modules" -type d -prune -exec rm -rf '{}' +
 RUN rm -rf \
         .ci \
         .git \
@@ -111,6 +115,8 @@ RUN rm -rf \
         doc \
         test \
         test-data
+# Clean up *all* node_modules, including plugins.  Everything is already built+staged.
+RUN find . -name "node_modules" -type d -prune -exec rm -rf '{}' +
 
 #======================================================
 # Stage 3 - Build final image based on previous stages
