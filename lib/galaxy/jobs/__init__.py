@@ -68,7 +68,10 @@ from galaxy.job_execution.setup import (
     TOOL_PROVIDED_JOB_METADATA_FILE,
     TOOL_PROVIDED_JOB_METADATA_KEYS,
 )
-from galaxy.jobs.job_destination import JobDestination
+from galaxy.jobs.job_destination import (
+    job_destination_params_for_persistence,
+    JobDestination,
+)
 from galaxy.jobs.mapper import (
     JobMappingException,
     JobRunnerMapper,
@@ -141,6 +144,7 @@ VALID_TOOL_CLASSES = ["local", "requires_galaxy", "user_defined"]
 
 class ResubmitConfigDict(TypedDict, total=False):
     environment: Union[str, None]
+    destination: Union[str, None]
     condition: Union[str, None]
     handler: Union[str, None]
     delay: Union[str, None]
@@ -2848,7 +2852,7 @@ class JobWrapper(MinimalJobWrapper):
             job = self.get_job()
         log.debug(f"({job.id}) Persisting job destination (destination id: {job_destination.id})")
         job.destination_id = job_destination.id
-        job.destination_params = job_destination.params
+        job.destination_params = job_destination_params_for_persistence(job_destination)
         job.job_runner_name = job_destination.runner
         job.job_runner_external_id = external_id
         self.sa_session.add(job)

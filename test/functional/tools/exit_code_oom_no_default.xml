@@ -1,0 +1,36 @@
+<tool id="exit_code_oom_no_default" name="exit_code_oom_no_default" version="0.1.0" profile="16.04">
+    <stdio>
+        <exit_code range="42" level="fatal_oom" description="Out of Memory" />
+    </stdio>
+    <command detect_errors="exit_code" oom_exit_code="42"><![CDATA[
+echo "Hello" > '$out_file1' &&
+echo "GALAXY_MEMORY_MB \${GALAXY_MEMORY_MB:-missing}" >> '$out_file1' &&
+if [[ -z \${GALAXY_MEMORY_MB:-} ]]; then
+    exit 1;
+fi &&
+if [ "\$GALAXY_MEMORY_MB" -lt 10 ]; then
+    exit 42;
+else
+    exit 0;
+fi
+    ]]></command>
+    <inputs>
+        <param name="input" type="integer" label="Dummy" value="6" />
+    </inputs>
+    <outputs>
+        <data name="out_file1" />
+    </outputs>
+    <tests>
+        <test>
+            <param name="input" value="5" />
+            <output name="out_file1">
+                <assert_contents>
+                    <has_line line="Hello" />
+                    <has_line line="GALAXY_MEMORY_MB 16" />
+                </assert_contents>
+            </output>
+        </test>
+    </tests>
+    <help>
+    </help>
+</tool>

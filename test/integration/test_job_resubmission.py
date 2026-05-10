@@ -9,6 +9,9 @@ SCRIPT_DIRECTORY = os.path.abspath(os.path.dirname(__file__))
 JOB_RESUBMISSION_JOB_CONFIG_FILE = os.path.join(SCRIPT_DIRECTORY, "resubmission_job_conf.yml")
 JOB_RESUBMISSION_DEFAULT_JOB_CONFIG_FILE = os.path.join(SCRIPT_DIRECTORY, "resubmission_default_job_conf.xml")
 JOB_RESUBMISSION_DYNAMIC_JOB_CONFIG_FILE = os.path.join(SCRIPT_DIRECTORY, "resubmission_dynamic_job_conf.xml")
+JOB_RESUBMISSION_DYNAMIC_MULTIPLE_JOB_CONFIG_FILE = os.path.join(
+    SCRIPT_DIRECTORY, "resubmission_dynamic_multiple_job_conf.xml"
+)
 JOB_RESUBMISSION_SMALL_MEMORY_JOB_CONFIG_FILE = os.path.join(SCRIPT_DIRECTORY, "resubmission_small_memory_job_conf.xml")
 JOB_RESUBMISSION_SMALL_MEMORY_RESUBMISSION_TO_LARGE_JOB_CONFIG_FILE = os.path.join(
     SCRIPT_DIRECTORY, "resubmission_small_memory_resubmission_to_large_job_conf.xml"
@@ -221,6 +224,18 @@ class TestJobResubmissionDynamicIntegration(_BaseResubmissionIntegrationTestCase
 
     def test_dynamic_resubmission(self):
         self._assert_job_passes()
+
+
+class TestJobResubmissionDynamicMultipleIntegration(_BaseResubmissionIntegrationTestCase):
+    framework_tool_and_types = True
+
+    @classmethod
+    def handle_galaxy_config_kwds(cls, config):
+        super().handle_galaxy_config_kwds(config)
+        config["job_config_file"] = JOB_RESUBMISSION_DYNAMIC_MULTIPLE_JOB_CONFIG_FILE
+
+    def test_dynamic_resubmission(self):
+        self._assert_job_passes(tool_id="exit_code_oom_no_default")
 
 
 # Verify the test tool fails if only a small amount of memory is allocated.

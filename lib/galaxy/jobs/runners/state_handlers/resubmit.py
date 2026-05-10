@@ -71,7 +71,7 @@ def _handle_resubmit_definitions(
             job_log_prefix = f"({job_state.job_wrapper.job_id})"
 
         # Is destination needed here, might these be serialized to the database?
-        if (destination := resubmit.get("environment")) is not None:
+        if (destination := resubmit.get("environment") or resubmit.get("destination")) is not None:
             new_destination = app.job_config.get_destination(destination)
         else:
             new_destination = job_state.job_destination

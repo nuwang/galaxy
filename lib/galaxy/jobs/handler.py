@@ -370,11 +370,10 @@ class JobHandlerQueue(BaseJobHandlerQueue):
         # Use the persisted destination as its params may differ from
         # what's in the job config
         job_destination = JobDestination(runner=job.job_runner_name, from_job=job)
-        # resubmits are not persisted (it's a good thing) so they
-        # should be added back to the in-memory destination on startup
         try:
             config_job_destination = self.app.job_config.get_destination(job.destination_id)
-            job_destination.resubmit = config_job_destination.resubmit
+            if not job_destination.resubmit:
+                job_destination.resubmit = config_job_destination.resubmit
             job_destination.env = config_job_destination.env
             job_destination.tags = config_job_destination.tags
         except KeyError:
