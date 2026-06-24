@@ -722,26 +722,43 @@ def test_authenticate_does_not_mutate_backend_default_scope(psa_authnz):
     remain the same across multiple calls to authenticate().
     """
     shared_default_scope = ["openid", "email", "profile"]
-    psa_authnz.config["EXTRA_SCOPES"] = ["offline_access", "custom_scope"]
+    psa_authnz.config["SCOPE"] = ["offline_access", "custom_scope"]
 
     class FakeBackend:
         name = "oidc"
         DEFAULT_SCOPE = shared_default_scope
 
+        def __init__(self):
+            self.strategy = None
+
+        def setting(self, name, default=None):
+            return self.strategy.setting(name, default=default, backend=self)
+
+        def get_scope(self):
+            scope = self.setting("SCOPE", [])
+            if not self.setting("IGNORE_DEFAULT_SCOPE", False):
+                scope = scope + (self.DEFAULT_SCOPE or [])
+            return scope
+
+    backend_instance = FakeBackend()
     observed_scopes = []
 
+    def fake_load_backend(strategy, redirect_uri):
+        backend_instance.strategy = strategy
+        return backend_instance
+
     def fake_do_auth(backend):
-        observed_scopes.append(list(backend.DEFAULT_SCOPE))
+        observed_scopes.append(backend.get_scope())
         return MagicMock()
 
     with (
         patch("galaxy.authnz.psa_authnz.on_the_fly_config"),
-        patch.object(psa_authnz, "_load_backend", side_effect=[FakeBackend(), FakeBackend()]),
+        patch.object(psa_authnz, "_load_backend", side_effect=fake_load_backend),
         patch("galaxy.authnz.psa_authnz.do_auth", side_effect=fake_do_auth),
     ):
         psa_authnz.authenticate(make_mock_trans())
         psa_authnz.authenticate(make_mock_trans())
 
-    expected = ["openid", "email", "profile", "offline_access", "custom_scope"]
+    expected = ["offline_access", "custom_scope", "openid", "email", "profile"]
     assert observed_scopes == [expected, expected]
     assert shared_default_scope == ["openid", "email", "profile"]
