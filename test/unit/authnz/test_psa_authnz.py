@@ -32,6 +32,7 @@ from jwt import (
     InvalidIssuerError,
     InvalidSignatureError,
 )
+from social_core.backends.base import BaseAuth
 from social_core.backends.open_id_connect import OpenIdConnectAuth
 from social_core.utils import (
     module_member,
@@ -811,7 +812,7 @@ def test_authenticate_with_real_backend_does_not_accumulate_extra_scopes(psa_aut
     backend_class = module_member(backend_path)
     original_default_scope = backend_class.DEFAULT_SCOPE
     expected_default_scope = list(original_default_scope or [])
-    backend_instances = []
+    backend_instances: list[BaseAuth] = []
     observed_scopes = []
 
     psa_authnz.config["provider"] = provider
