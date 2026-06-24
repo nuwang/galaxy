@@ -738,6 +738,7 @@ def test_authenticate_does_not_mutate_backend_default_scope(psa_authnz):
             self.strategy = None
 
         def setting(self, name, default=None):
+            assert self.strategy is not None
             return self.strategy.setting(name, default=default, backend=self)
 
         def get_scope(self):
@@ -810,19 +811,18 @@ def test_authenticate_with_real_backend_does_not_accumulate_extra_scopes(psa_aut
     backend_class = module_member(backend_path)
     original_default_scope = backend_class.DEFAULT_SCOPE
     expected_default_scope = list(original_default_scope or [])
-    backend_instance = None
+    backend_instances = []
     observed_scopes = []
 
     psa_authnz.config["provider"] = provider
     psa_authnz.config[setting_name("SCOPE")] = extra_scopes
 
     def fake_load_backend(strategy, redirect_uri):
-        nonlocal backend_instance
-        if backend_instance is None:
-            backend_instance = backend_class(strategy, redirect_uri)
+        if not backend_instances:
+            backend_instances.append(backend_class(strategy, redirect_uri))
         else:
-            backend_instance.strategy = strategy
-        return backend_instance
+            backend_instances[0].strategy = strategy
+        return backend_instances[0]
 
     def fake_do_auth(backend):
         observed_scopes.append(backend.get_scope())
