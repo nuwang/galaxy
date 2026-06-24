@@ -33,6 +33,10 @@ from jwt import (
     InvalidSignatureError,
 )
 from social_core.backends.open_id_connect import OpenIdConnectAuth
+from social_core.utils import (
+    module_member,
+    setting_name,
+)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -43,10 +47,12 @@ from galaxy.authnz.oidc_utils import decode_access_token as decode_access_token_
 from galaxy.authnz.psa_authnz import (
     apply_user_activation_policy,
     AUTH_PIPELINE,
+    BACKENDS,
     create_and_activate_oidc_user,
     create_user_and_activate,
     decode_access_token,
     PSAAuthnz,
+    Strategy,
     sync_user_profile,
 )
 
@@ -762,3 +768,78 @@ def test_authenticate_does_not_mutate_backend_default_scope(psa_authnz):
     expected = ["offline_access", "custom_scope", "openid", "email", "profile"]
     assert observed_scopes == [expected, expected]
     assert shared_default_scope == ["openid", "email", "profile"]
+
+
+@pytest.mark.parametrize("provider, backend_path", BACKENDS.items())
+def test_configured_extra_scopes_are_requested_without_mutating_backend_default_scope(provider, backend_path):
+    """
+    Verify the actual backend classes Galaxy uses request configured scopes via
+    social-core's SCOPE setting without mutating the backend's DEFAULT_SCOPE.
+    """
+    extra_scopes = ["offline_access", "custom_scope"]
+    backend_class = module_member(backend_path)
+    original_default_scope = backend_class.DEFAULT_SCOPE
+    expected_default_scope = list(original_default_scope or [])
+    config = {
+        "provider": provider,
+        "redirect_uri": "https://galaxy.example.com/authnz/callback",
+        setting_name("SCOPE"): extra_scopes,
+    }
+    trans = make_mock_trans()
+    strategy = Strategy(trans.request, trans.session, None, config)
+
+    try:
+        backend = backend_class(strategy, config["redirect_uri"])
+        observed_scopes = backend.get_scope()
+
+        assert observed_scopes == extra_scopes + expected_default_scope
+        assert backend_class.DEFAULT_SCOPE is original_default_scope
+        assert list(backend_class.DEFAULT_SCOPE or []) == expected_default_scope
+    finally:
+        backend_class.DEFAULT_SCOPE = original_default_scope
+
+
+@pytest.mark.parametrize("provider, backend_path", BACKENDS.items())
+def test_authenticate_with_real_backend_does_not_accumulate_extra_scopes(psa_authnz, provider, backend_path):
+    """
+    Verify repeated authenticate() calls request the same scope list when using
+    the actual backend classes Galaxy supports, even if a backend instance is
+    reused across calls.
+    """
+    extra_scopes = ["offline_access", "custom_scope"]
+    backend_class = module_member(backend_path)
+    original_default_scope = backend_class.DEFAULT_SCOPE
+    expected_default_scope = list(original_default_scope or [])
+    backend_instance = None
+    observed_scopes = []
+
+    psa_authnz.config["provider"] = provider
+    psa_authnz.config[setting_name("SCOPE")] = extra_scopes
+
+    def fake_load_backend(strategy, redirect_uri):
+        nonlocal backend_instance
+        if backend_instance is None:
+            backend_instance = backend_class(strategy, redirect_uri)
+        else:
+            backend_instance.strategy = strategy
+        return backend_instance
+
+    def fake_do_auth(backend):
+        observed_scopes.append(backend.get_scope())
+        return MagicMock()
+
+    try:
+        with (
+            patch("galaxy.authnz.psa_authnz.on_the_fly_config"),
+            patch.object(psa_authnz, "_load_backend", side_effect=fake_load_backend),
+            patch("galaxy.authnz.psa_authnz.do_auth", side_effect=fake_do_auth),
+        ):
+            psa_authnz.authenticate(make_mock_trans())
+            psa_authnz.authenticate(make_mock_trans())
+
+        expected_scope = extra_scopes + expected_default_scope
+        assert observed_scopes == [expected_scope, expected_scope]
+        assert backend_class.DEFAULT_SCOPE is original_default_scope
+        assert list(backend_class.DEFAULT_SCOPE or []) == expected_default_scope
+    finally:
+        backend_class.DEFAULT_SCOPE = original_default_scope
