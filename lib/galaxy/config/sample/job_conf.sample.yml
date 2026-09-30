@@ -933,6 +933,8 @@ execution:
        # Pulsar (0.15.16 or later) to a presigned URL when the object store has
        # enable_direct_download set, and streams otherwise. Use 'redirect' only
        # if Pulsar can reach the object store. Requires rewrite_parameters.
+       # Extra files of composite inputs are listed in the object store, which
+       # irods, pithos, rucio and onedata stores cannot do.
        #object_store_staging: stream
 
        # The non-legacy Pulsar runners will attempt to resolve Galaxy

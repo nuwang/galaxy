@@ -58,6 +58,18 @@ tools:
 """)
 
 INPUT_CONTENT = "staged input\n"
+SEQUENCES_CONTENT = "sequences content\n"
+VELVET_UPLOAD = {
+    "src": "composite",
+    "ext": "velvet",
+    "composite": {
+        "items": [
+            {"src": "pasted", "paste_content": SEQUENCES_CONTENT},
+            {"src": "pasted", "paste_content": "roadmaps content\n"},
+            {"src": "pasted", "paste_content": "log content\n"},
+        ]
+    },
+}
 
 
 @integration_util.skip_unless_docker()
@@ -135,6 +147,19 @@ class TestPulsarObjectStagingStream(BaseObjectStoreIntegrationTestCase):
         assert output.strip() == "chrM"
         assert not os.path.exists(self._cache_path(hda))
 
+    def test_composite_input_extra_files_are_staged(self):
+        # The composite tool reads $input.extra_files_path/Sequences.
+        history_id = self.dataset_populator.new_history()
+        hda = self.dataset_populator.fetch_hda(history_id, VELVET_UPLOAD, wait=True)
+        self._reset_cache()
+
+        run = self.dataset_populator.run_tool("composite", {"input": {"src": "hda", "id": hda["id"]}}, history_id)
+        self.dataset_populator.wait_for_job(run["jobs"][0]["id"], assert_ok=True)
+
+        output = self.dataset_populator.get_history_dataset_content(history_id, dataset=run["outputs"][0])
+        assert output == SEQUENCES_CONTENT
+        assert self._cached_files_of(hda) == []
+
     def _hda(self, hda_dict) -> model.HistoryDatasetAssociation:
         hda = self._app.model.session.get(model.HistoryDatasetAssociation, self._app.security.decode_id(hda_dict["id"]))
         assert hda is not None and hda.dataset is not None
@@ -142,6 +167,13 @@ class TestPulsarObjectStagingStream(BaseObjectStoreIntegrationTestCase):
 
     def _cache_path(self, hda_dict):
         return self._app.object_store.get_filename(self._hda(hda_dict).dataset, sync_cache=False)
+
+    def _cached_files_of(self, hda_dict):
+        """Cached files of the dataset, its primary file and extra files alike (stored by uuid)."""
+        dataset = self._hda(hda_dict).dataset
+        assert dataset is not None
+        cached = (os.path.join(root, f) for root, _, files in os.walk(self.object_store_cache_path) for f in files)
+        return [path for path in cached if str(dataset.uuid) in path]
 
     def _reset_cache(self):
         for root, _, files in os.walk(self.object_store_cache_path):
