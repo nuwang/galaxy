@@ -101,6 +101,7 @@ from galaxy.model.store.discover import (
     MaxDiscoveredFilesExceededError,
     OutputCollectionSecurityError,
 )
+from galaxy.model.store.job_import import validate_job_import
 from galaxy.objectstore import (
     is_user_object_store,
     ObjectStorePopulator,
@@ -2349,6 +2350,8 @@ class MinimalJobWrapper(HasResourceParameters):
                     user=job.user,
                     tag_handler=self.app.tag_handler.create_tag_handler_session(job.galaxy_session),
                 )
+                # The store was written in the job's working directory: it may only touch this job's outputs.
+                validate_job_import(import_model_store, job, allow_external_filename=self.__link_file_check())
                 object_import_tracker = import_model_store.perform_import(history=job.history, job=job)
                 # Datasets discovered by the job are created by the import, without permissions.
                 # Precreated outputs (hdas_by_id) got their permissions when the job was created.
