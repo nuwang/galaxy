@@ -800,11 +800,16 @@ class TestDatasetCollectionsApi(ApiTestCase):
                 self._assert_status_code_is(create_response, 403)
 
     def test_fetched_list_elements_get_default_permissions(self, history_id):
-        self.dataset_collection_populator.create_list_in_history(
+        response = self.dataset_collection_populator.create_list_in_history(
             history_id, contents=["a\n", "b\n"], direct_upload=True, wait=True
         )
+        hdca = response.json()["output_collections"][0]
         self.dataset_populator.wait_for_history(history_id, assert_ok=True)
-        self.dataset_populator.assert_history_datasets_permissions(history_id, expected_count=2, access_private=False)
+        elements = self.dataset_populator.get_history_collection_details(history_id, hid=hdca["hid"])["elements"]
+        role_id = self.dataset_populator.user_private_role_id()
+        for element in elements:
+            permissions = self._get(f"datasets/{element['object']['id']}").json()["permissions"]
+            assert permissions == {"manage": [role_id], "access": [role_id]}
 
     def test_dataset_collection_element_security(self):
         with self.dataset_populator.test_history(require_new=False) as history_id:
