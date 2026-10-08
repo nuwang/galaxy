@@ -3279,6 +3279,7 @@ class NavigatesGalaxy(HasDriverProxy[WaitType]):
         screenshot_before_submit=None,
         screenshot_after_submit=None,
         assert_valid=False,
+        confirm_permissions_change=False,
     ):
         self.share_ensure_by_user_available(sharing_component)
         multiselect = sharing_component.share_with_multiselect.wait_for_and_click()
@@ -3287,6 +3288,9 @@ class NavigatesGalaxy(HasDriverProxy[WaitType]):
 
         self.screenshot_if(screenshot_before_submit)
         sharing_component.submit_sharing_with.wait_for_and_click()
+        if confirm_permissions_change:
+            sharing_component.permissions_change_required_how.wait_for_visible()
+            sharing_component.permissions_change_required_ok.wait_for_and_click()
 
         if assert_valid:
             self.assert_no_error_message()

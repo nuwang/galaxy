@@ -468,6 +468,7 @@ class TestDatasetsApi(ApiTestCase):
     def test_anon_get_content_as_text(self, history_id):
         contents = "accessible data"
         hda1 = self.dataset_populator.new_dataset(history_id, content=contents, wait=True)
+        self.dataset_populator.make_dataset_public(history_id, hda1["id"])
         with self._different_user(anon=True):
             get_content_as_text_response = self._get(f"datasets/{hda1['id']}/get_content_as_text")
             self._assert_status_code_is(get_content_as_text_response, 200)
