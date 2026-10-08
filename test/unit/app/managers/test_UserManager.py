@@ -317,6 +317,33 @@ class TestUserManager(BaseTestCase):
         # Email lookups should be case-insensitive
         assert self.user_manager.get_user_by_identity(uppercase_email_user["email"].capitalize()) == uppercase_user
 
+    def test_new_remote_user_default_access_private(self):
+        self.app.config.use_remote_user = True
+        self.app.config.new_user_dataset_access_role_default_private = True
+        user = self.user_manager.get_or_create_remote_user("remote@example.org")
+        assert self._default_access_roles(user) == [self.app.security_agent.get_private_user_role(user)]
+
+    def test_new_remote_user_default_access_public(self):
+        self.app.config.use_remote_user = True
+        self.app.config.new_user_dataset_access_role_default_private = False
+        user = self.user_manager.get_or_create_remote_user("remote@example.org")
+        assert user.default_permissions
+        assert self._default_access_roles(user) == []
+
+    def test_existing_remote_user_without_default_permissions_default_access_private(self):
+        self.app.config.use_remote_user = True
+        self.app.config.new_user_dataset_access_role_default_private = True
+        user = model.User(email="remote@example.org", username="remote", password="*")
+        self.trans.sa_session.add(user)
+        self.trans.sa_session.commit()
+        assert not user.default_permissions
+        user = self.user_manager.get_or_create_remote_user("remote@example.org")
+        assert self._default_access_roles(user) == [self.app.security_agent.get_private_user_role(user)]
+
+    def _default_access_roles(self, user):
+        access = self.app.security_agent.permitted_actions.DATASET_ACCESS.action
+        return [dup.role for dup in user.default_permissions if dup.action == access]
+
 
 # =============================================================================
 class TestUserSerializer(BaseTestCase):
