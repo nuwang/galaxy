@@ -2046,6 +2046,10 @@ def type_to_object_store_class(
     objectstore_constructor_kwds: dict[str, Any] = {}
     if store == "disk":
         objectstore_class = DiskObjectStore
+    elif store == "job_local":
+        from .job_local import JobLocalObjectStore
+
+        objectstore_class = JobLocalObjectStore
     elif store == "boto3":
         from .s3_boto3 import S3ObjectStore as Boto3ObjectStore
 
