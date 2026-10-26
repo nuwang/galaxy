@@ -3,6 +3,7 @@
 import errno
 import json
 import os
+from unittest import mock
 
 import pytest
 
@@ -14,9 +15,11 @@ from galaxy.model import (
 )
 from galaxy.objectstore import build_object_store_from_config
 from galaxy.objectstore.job_local import (
+    job_local_object_store_config,
     JobLocalObjectStore,
     MANIFEST_NAME,
 )
+from galaxy.objectstore.unittest_utils import Config as TestConfig
 from galaxy.util.bunch import Bunch
 
 APP_CONFIG = {
@@ -251,3 +254,30 @@ def test_store_is_rebuilt_from_its_config(store, staging_directory, source):
 def test_store_refuses_to_lay_out_objects_by_id(staging_directory):
     with pytest.raises(ConfigurationError):
         JobLocalObjectStore(Bunch(**APP_CONFIG), {"files_dir": str(staging_directory), "store_by": "id"})
+
+
+BOTO3_CONFIG = """
+type: boto3
+auth:
+  access_key: access_moo
+  secret_key: secret_cow
+bucket:
+  name: unique_bucket_name_all_lowercase
+cache:
+  path: ${temp_directory}/object_store_cache
+  size: 1000
+"""
+
+
+def test_job_config_stages_into_the_jobs_directory_without_credentials(staging_directory, source):
+    # Galaxy's own store, with credentials; it is never contacted here.
+    with mock.patch("galaxy.objectstore.s3_boto3.S3ObjectStore._initialize"):
+        with TestConfig(BOTO3_CONFIG, store_by="uuid") as (_, galaxy_object_store):
+            config = job_local_object_store_config(galaxy_object_store, str(staging_directory))
+
+    assert "secret_cow" not in json.dumps(config) and "access_moo" not in json.dumps(config)
+    job_store = build_object_store_from_config(None, config_dict=config, disable_process_management=True)
+    dataset = _dataset()
+    job_store.update_from_file(dataset, file_name=source("staged\n"), create=True)
+    [record] = _manifest(staging_directory)
+    assert record["uuid"] == str(dataset.uuid)

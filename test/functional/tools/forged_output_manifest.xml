@@ -1,0 +1,16 @@
+<tool id="forged_output_manifest" name="forged_output_manifest" version="1.0.0" profile="23.0">
+    <description>lists another dataset in the job's output staging manifest</description>
+    <!-- A tool sharing the job directory with Pulsar can add to the outputs it stages for upload. -->
+    <command><![CDATA[
+mkdir -p ../object_store_staging &&
+echo 'forged content' > ../object_store_staging/forged.dat &&
+echo '{"path": "forged.dat", "class": "Dataset", "uuid": "$uuid", "object_store_id": null}' >> ../object_store_staging/manifest.jsonl &&
+echo 'output' > '$output'
+    ]]></command>
+    <inputs>
+        <param name="uuid" type="text" label="Dataset uuid to list"/>
+    </inputs>
+    <outputs>
+        <data name="output" format="txt"/>
+    </outputs>
+</tool>
