@@ -16,11 +16,25 @@ from typing import Any
 
 from galaxy.exceptions import ConfigurationError
 from galaxy.util import umask_fix_perms
-from . import DiskObjectStore
+from . import (
+    BaseObjectStore,
+    config_to_dict,
+    DiskObjectStore,
+)
 
 MANIFEST_NAME = "manifest.jsonl"
 # Path arguments that locate a file within an object, recorded so Galaxy can place it.
 LOCATION_KEYS = ("extra_dir", "extra_dir_at_root", "alt_name")
+
+
+def job_local_object_store_config(object_store: BaseObjectStore, files_dir: str) -> dict[str, Any]:
+    """Configuration for a job's ``job_local`` store under ``files_dir``: no backend, so no credentials."""
+    return {
+        "type": "job_local",
+        "files_dir": files_dir,
+        "store_by": "uuid",
+        "config": config_to_dict(object_store.config),
+    }
 
 
 class JobLocalObjectStore(DiskObjectStore):

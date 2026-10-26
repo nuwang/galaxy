@@ -217,6 +217,17 @@ class TestCommandFactory(TestCase):
         assert configured_kwds["dataset_files_path"] == "/path/to/remote/datasets/"
         assert configured_kwds["output_fnames"] == ["/path/to/remote_output1"]
 
+    def test_metadata_stages_outputs_where_the_runner_says(self):
+        configured_kwds = self.__set_metadata_with_kwds(
+            object_store_staging_directory="/path/to/remote/staging/directory/job1/object_store_staging"
+        )
+        assert configured_kwds["object_store_staging_directory"] == (
+            "/path/to/remote/staging/directory/job1/object_store_staging"
+        )
+
+    def test_metadata_stages_no_outputs_by_default(self):
+        assert self.__set_metadata_with_kwds()["object_store_staging_directory"] is None
+
     def __set_metadata_with_kwds(self, **kwds):
         self.include_metadata = True
         self.include_work_dir_outputs = False

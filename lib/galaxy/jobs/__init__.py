@@ -107,6 +107,9 @@ from galaxy.objectstore import (
     ObjectStorePopulator,
     serialize_static_object_store_config,
 )
+from galaxy.objectstore.job_local import (
+    job_local_object_store_config,
+)
 from galaxy.schema.tasks import ComputeDatasetHashTaskRequest
 from galaxy.structured_app import MinimalManagerApp
 from galaxy.tool_util.deps import requirements
@@ -2803,8 +2806,14 @@ class MinimalJobWrapper(HasResourceParameters):
         datatypes_config=None,
         resolve_metadata_dependencies=False,
         set_extension=True,
+        object_store_staging_directory=None,
         **kwds,
     ):
+        """Build the metadata command for this job.
+
+        With ``object_store_staging_directory``, the metadata step stages outputs there for the job's runner
+        to upload, through a ``job_local`` object store holding no storage credentials.
+        """
         # extension could still be 'auto' if this is the upload tool.
         job = self.get_job()
         if set_extension:
@@ -2836,7 +2845,10 @@ class MinimalJobWrapper(HasResourceParameters):
                 required_user_object_store_uris.add(object_store_id)
 
         job_metadata = os.path.join(self.tool_working_directory, self.tool.provided_metadata_file)
-        object_store_conf = serialize_static_object_store_config(self.object_store, required_user_object_store_uris)
+        if object_store_staging_directory is not None:
+            object_store_conf = job_local_object_store_config(self.object_store, object_store_staging_directory)
+        else:
+            object_store_conf = serialize_static_object_store_config(self.object_store, required_user_object_store_uris)
         command = self.external_output_metadata.setup_external_metadata(
             out_data,
             out_collections,

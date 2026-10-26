@@ -65,6 +65,10 @@ from galaxy.managers.job_object_staging import (
     input_url,
     INPUT_URL_LIFETIME_SECONDS,
 )
+from galaxy.managers.job_output_staging import (
+    output_targets_url,
+    OUTPUT_TARGETS_URL_LIFETIME_SECONDS,
+)
 from galaxy.model.base import check_database_connection
 from galaxy.model.metadata import FileParameter
 from galaxy.model.store.discover import safe_path_from_directory
@@ -102,6 +106,7 @@ MINIMUM_PULSAR_VERSIONS = {
     "remote_container_handling": Version("0.9.1.dev0"),  # probably 0.10 ultimately?
     "dataset_collector_descriptions": Version("0.15.13.dev0"),  # Support for directory-aware pattern matching
     "object_store_staging_redirect": Version("0.15.16"),  # curl transport follows redirects
+    "object_store_staging_outputs": Version("0.16.1.dev0"),  # uploads outputs to targets Galaxy issues
 }
 OBJECT_STORE_STAGING_MODES = ("stream", "redirect")
 
@@ -525,6 +530,7 @@ class PulsarJobRunner(AsynchronousJobRunner[AsynchronousJobState]):
                 container=None if not remote_container else remote_container.container_id,
                 guest_ports=job_wrapper.guest_ports,
                 tool_directory_required_files=tool_directory_required_files,
+                output_targets_url=compute_environment.output_targets_url if compute_environment else None,
             )
             external_job_id = pulsar_submit_job(client, client_job_description, remote_job_config)
             log.info(f"Pulsar job submitted with job_id {external_job_id}")
@@ -603,6 +609,10 @@ class PulsarJobRunner(AsynchronousJobRunner[AsynchronousJobState]):
                 remote_job_config,
                 compute_environment=compute_environment,
             )
+            output_staging = self._output_staging(job_wrapper, compute_environment, remote_job_config, remote_metadata)
+            if output_staging is not None:
+                assert compute_environment is not None
+                metadata_kwds["object_store_staging_directory"], compute_environment.output_targets_url = output_staging
             remote_working_directory = remote_job_config["working_directory"]
             remote_job_directory = remote_job_config["job_directory"]
             remote_tool_directory = remote_job_config["tools_directory"]
@@ -738,6 +748,33 @@ class PulsarJobRunner(AsynchronousJobRunner[AsynchronousJobState]):
         # back to the Galaxy id when nothing was ever recorded.
         external_id = job_wrapper.get_job().get_job_runner_external_id()
         return self.get_client(job_destination_params, job_id, external_id=external_id)
+
+    def _output_staging(
+        self, job_wrapper, compute_environment, remote_job_config, remote_metadata
+    ) -> tuple[str, str] | None:
+        """Where a job's metadata step stages its outputs, and the URL Pulsar asks for their upload targets at.
+
+        With ``object_store_staging`` and extended metadata set remotely, the job's outputs reach the object
+        store through upload targets Galaxy issues for them rather than through storage credentials in the
+        job directory; otherwise outputs come back as before. A Pulsar that cannot upload outputs is refused.
+        """
+        if (
+            compute_environment is None
+            or compute_environment.object_store_staging is None
+            or not remote_metadata
+            or not job_wrapper.external_output_metadata.write_object_store_conf
+        ):
+            return None
+        staging_directory = remote_job_config.get("object_store_staging_directory")
+        minimum_version = MINIMUM_PULSAR_VERSIONS["object_store_staging_outputs"]
+        if staging_directory is None or self.pulsar_version(remote_job_config) < minimum_version:
+            raise ConfigurationError(
+                f"object_store_staging with remote extended metadata needs Pulsar {minimum_version} or later."
+            )
+        if not _stores_outputs_by_uuid(self.app.object_store, job_wrapper.get_job()):
+            raise ConfigurationError("object_store_staging with remote extended metadata needs outputs stored by uuid.")
+        expires = int(time()) + OUTPUT_TARGETS_URL_LIFETIME_SECONDS
+        return staging_directory, output_targets_url(self.app.security, self.galaxy_url, job_wrapper.job_id, expires)
 
     def _client_inputs(self, job_wrapper, compute_environment, remote_job_config) -> ClientInputs:
         """Describe a job's inputs for the Pulsar client.
@@ -1450,6 +1487,23 @@ def _metadata_file_with_path(dataset, path) -> model.MetadataFile | None:
     return None
 
 
+def _stores_outputs_by_uuid(object_store, job: model.Job) -> bool:
+    """Whether every store the job's outputs, declared or new, may be kept in lays objects out by uuid."""
+    outputs = [
+        *(association.dataset.dataset for association in job.output_datasets if association.dataset),
+        *(association.dataset.dataset for association in job.output_library_datasets if association.dataset),
+    ]
+    store_ids = {job.object_store_id, *(job.object_store_id_overrides or {}).values()} - {None}
+    backends = (
+        [object_store.get_concrete_store_by_object_store_id(store_id) for store_id in store_ids]
+        if store_ids
+        else object_store.get_concrete_store_backends()
+    )
+    return all(object_store.get_store_by(dataset) == "uuid" for dataset in outputs if dataset) and all(
+        backend.store_by == "uuid" for backend in backends if backend is not None
+    )
+
+
 class PulsarComputeEnvironment(ComputeEnvironment):
     def __init__(self, pulsar_client, job_wrapper, remote_job_config):
         self.pulsar_client = pulsar_client
@@ -1462,6 +1516,8 @@ class PulsarComputeEnvironment(ComputeEnvironment):
         # Inputs are staged by object store identity; metadata file ids are keyed by local path.
         self.object_store_staging = pulsar_client.destination_params.get("object_store_staging")
         self.input_metadata_file_ids: dict[str, int] = {}
+        # Set when outputs are uploaded to targets Galaxy issues (see PulsarJobRunner._output_staging).
+        self.output_targets_url: str | None = None
 
         # job_wrapper.prepare is going to expunge the job backing the following
         # computations, so precalculate these paths.

@@ -936,6 +936,13 @@ execution:
        # Pulsar (0.15.16 or later) to a presigned URL when the object store has
        # enable_direct_download set, and streams otherwise. Use 'redirect' only
        # if Pulsar can reach the object store. Requires rewrite_parameters.
+       # With remote_metadata and the extended metadata strategy, outputs then
+       # leave the job without storage credentials in the job directory: the
+       # metadata step stages them in the job directory, and Pulsar (0.16.1 or
+       # later) uploads each to a target Galaxy issues - a presigned URL when
+       # the object store has enable_direct_upload set (and Pulsar can reach
+       # it), else Galaxy itself, which writes it to the store. Outputs must be
+       # stored by uuid; Galaxy refuses the job otherwise.
        # Each input's URL is signed in its query string and works until the
        # job finishes, and a presigned URL for 15 minutes, so keep query
        # strings out of access logs, as for the job_key of job files URLs.

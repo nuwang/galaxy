@@ -553,3 +553,86 @@ def test_input_metadata_rewrite_records_nothing_for_a_path_that_is_no_metadata_f
     compute_environment = _staging_compute_environment_for_rewrites("stream")
     compute_environment.input_metadata_rewrite(hda, str(tmp_path / "not_a_metadata_file.dat"))
     assert compute_environment.input_metadata_file_ids == {}
+
+
+OUTPUT_STAGING_DIRECTORY = "/pulsar/staging/7/object_store_staging"
+OUTPUT_STAGING_JOB_CONFIG = {"object_store_staging_directory": OUTPUT_STAGING_DIRECTORY, "pulsar_version": "0.16.1"}
+
+
+def _output_staging_runner(app):
+    runner = _staging_runner()
+    runner.app.object_store = app.object_store
+    return runner
+
+
+def _output_staging_job_wrapper(app, extended_metadata=True):
+    output = HistoryDatasetAssociation(create_dataset=True, sa_session=app.model.session)
+    job = model.Job()
+    job.add_output_dataset("output", output)
+    app.model.session.add_all([output, job])
+    app.model.session.commit()
+    return SimpleNamespace(
+        job_id=7,
+        get_job=lambda: job,
+        external_output_metadata=SimpleNamespace(write_object_store_conf=extended_metadata),
+    )
+
+
+def test_outputs_go_to_upload_targets_with_remote_extended_metadata():
+    app = GalaxyDataTestApp()
+    runner = _output_staging_runner(app)
+
+    staging_directory, targets_url = runner._output_staging(
+        _output_staging_job_wrapper(app), _staging_compute_environment("stream"), OUTPUT_STAGING_JOB_CONFIG, True
+    )
+
+    assert staging_directory == OUTPUT_STAGING_DIRECTORY
+    parsed = urlparse(targets_url)
+    assert parsed.path == f"/api/jobs/{runner.app.security.encode_id(7)}/staging/outputs/targets"
+    query = parse_qs(parsed.query)
+    assert StagingUrlSigner(STAGING_SECRET).verify(7, "output_targets", 7, "", int(query["exp"][0]), query["sig"][0])
+
+
+@pytest.mark.parametrize(
+    "staging, remote_metadata, extended_metadata",
+    [(None, True, True), ("stream", False, True), ("stream", True, False)],
+)
+def test_outputs_go_back_as_before_unless_staged_with_remote_extended_metadata(
+    staging, remote_metadata, extended_metadata
+):
+    # Outputs then reach Galaxy through the job files API, or metadata is set where credentials already are.
+    app = GalaxyDataTestApp()
+    output_staging = _output_staging_runner(app)._output_staging(
+        _output_staging_job_wrapper(app, extended_metadata),
+        _staging_compute_environment(staging),
+        OUTPUT_STAGING_JOB_CONFIG,
+        remote_metadata,
+    )
+    assert output_staging is None
+
+
+@pytest.mark.parametrize(
+    "remote_job_config",
+    [
+        {"pulsar_version": "0.16.1"},
+        {"object_store_staging_directory": OUTPUT_STAGING_DIRECTORY, "pulsar_version": "0.16.0"},
+    ],
+)
+def test_pulsar_that_cannot_upload_outputs_is_refused(remote_job_config):
+    # Rather than giving the job the store's credentials.
+    app = GalaxyDataTestApp()
+    with pytest.raises(ConfigurationError):
+        _output_staging_runner(app)._output_staging(
+            _output_staging_job_wrapper(app), _staging_compute_environment("stream"), remote_job_config, True
+        )
+
+
+def test_outputs_stored_by_id_are_refused():
+    # Galaxy places staged files by uuid; a dataset stored by id has no path before Galaxy imports it.
+    app = GalaxyDataTestApp()
+    job_wrapper = _output_staging_job_wrapper(app)
+    app.object_store.store_by = "id"
+    with pytest.raises(ConfigurationError):
+        _output_staging_runner(app)._output_staging(
+            job_wrapper, _staging_compute_environment("stream"), OUTPUT_STAGING_JOB_CONFIG, True
+        )
