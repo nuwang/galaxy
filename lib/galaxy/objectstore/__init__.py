@@ -23,6 +23,7 @@ from typing import (
     Literal,
     NamedTuple,
     TYPE_CHECKING,
+    TypedDict,
 )
 from uuid import uuid4
 
@@ -100,6 +101,42 @@ class DataStream(Protocol):
 class ObjectStoreAuth:
     user: User | None = None
     token: str | None = None
+
+
+class UploadPart(TypedDict):
+    """A byte range of a multipart upload and the URL to PUT it to."""
+
+    part_number: int
+    url: str
+    offset: int
+    size: int
+
+
+class CompletedPart(TypedDict):
+    """An uploaded part: its number and the ETag the store answered its PUT with."""
+
+    part_number: int
+    etag: str
+
+
+@dataclass(frozen=True)
+class PutUploadTarget:
+    """Upload the whole file with one PUT of exactly its size to ``url``."""
+
+    url: str
+
+
+@dataclass(frozen=True)
+class MultipartUploadTarget:
+    """PUT each part's byte range to its URL, then ``complete_upload`` with the parts as uploaded."""
+
+    upload_id: str
+    parts: list[UploadPart]
+
+
+UploadTarget = PutUploadTarget | MultipartUploadTarget
+# Upload URLs must outlive the whole upload: a large file's parts are uploaded in turn.
+DEFAULT_DIRECT_UPLOAD_EXPIRES_IN = 24 * 60 * 60
 
 
 def is_user_object_store(object_store_id: str | None) -> bool:
@@ -448,6 +485,26 @@ class ObjectStore(metaclass=abc.ABCMeta):
         that should not displace cached objects. ``extra_dir``, ``extra_dir_at_root`` and ``alt_name``
         address a file stored with `obj` as in ``get_filename``.
         """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def get_upload_target(
+        self, obj, size: int, extra_dir=None, extra_dir_at_root=False, alt_name=None
+    ) -> UploadTarget | None:
+        """Return how a client can upload a file of ``size`` bytes for `obj` straight to the backing store.
+
+        Returns None unless the concrete store supports direct uploads *and* the admin has opted in via
+        the ``enable_direct_upload`` configuration flag; the caller then uploads through Galaxy instead.
+        ``extra_dir``, ``extra_dir_at_root`` and ``alt_name`` address a file stored with `obj` as in
+        ``update_from_file``. A multipart target must be finished with ``complete_upload``.
+        """
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def complete_upload(
+        self, obj, upload_id: str, parts: list[CompletedPart], extra_dir=None, extra_dir_at_root=False, alt_name=None
+    ) -> None:
+        """Finish a multipart upload ``get_upload_target`` issued for `obj`, from the parts as uploaded."""
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -860,6 +917,34 @@ class BaseObjectStore(ObjectStore):
         # Stores that cannot stream their objects remotely (e.g. disk) get this no-op default.
         return None
 
+    def get_upload_target(
+        self, obj, size: int, extra_dir=None, extra_dir_at_root=False, alt_name=None
+    ) -> UploadTarget | None:
+        return self._invoke(
+            "get_upload_target",
+            obj,
+            size=size,
+            extra_dir=extra_dir,
+            extra_dir_at_root=extra_dir_at_root,
+            alt_name=alt_name,
+        )
+
+    def complete_upload(
+        self, obj, upload_id: str, parts: list[CompletedPart], extra_dir=None, extra_dir_at_root=False, alt_name=None
+    ) -> None:
+        self._invoke(
+            "complete_upload",
+            obj,
+            upload_id=upload_id,
+            parts=parts,
+            extra_dir=extra_dir,
+            extra_dir_at_root=extra_dir_at_root,
+            alt_name=alt_name,
+        )
+
+    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], **kwargs) -> None:
+        raise NotImplementedError(f"{type(self).__name__} issues no multipart uploads to complete.")
+
     def get_concrete_store_backends(self) -> list[ConcreteObjectStore]:
         return self._invoke("get_concrete_store_backends")
 
@@ -897,6 +982,16 @@ class BaseObjectStore(ObjectStore):
         if config_xml is not None:
             enable_direct_download = asbool(config_xml.attrib.get("enable_direct_download", False))
         return enable_direct_download
+
+    @classmethod
+    def parse_direct_upload_from_config_xml(clazz, config_xml) -> dict[str, Any]:
+        direct_upload: dict[str, Any] = {}
+        if config_xml is not None:
+            direct_upload["enable_direct_upload"] = asbool(config_xml.attrib.get("enable_direct_upload", False))
+            expires_in = config_xml.attrib.get("direct_upload_expires_in")
+            if expires_in is not None:
+                direct_upload["direct_upload_expires_in"] = int(expires_in)
+        return direct_upload
 
     @classmethod
     def parse_badges_from_config_xml(clazz, badges_xml):
@@ -966,6 +1061,12 @@ class ConcreteObjectStore(BaseObjectStore):
         # presigned URL) instead of streaming through Galaxy. Opt-in; only meaningful for stores whose
         # _get_object_url returns a usable URL.
         self.enable_direct_download = asbool(config_dict.get("enable_direct_download", False))
+        # Allow jobs to upload their outputs straight to the backing store (e.g. to presigned URLs)
+        # instead of through Galaxy. Opt-in; only meaningful for stores implementing _upload_target.
+        self.enable_direct_upload = asbool(config_dict.get("enable_direct_upload", False))
+        self.direct_upload_expires_in = int(
+            config_dict.get("direct_upload_expires_in", DEFAULT_DIRECT_UPLOAD_EXPIRES_IN)
+        )
         self.badges = read_badges(config_dict)
 
     def get_concrete_store_backends(self):
@@ -987,6 +1088,8 @@ class ConcreteObjectStore(BaseObjectStore):
         rval["badges"] = self._get_concrete_store_badges(None)
         rval["device"] = self.device_id
         rval["enable_direct_download"] = self.enable_direct_download
+        rval["enable_direct_upload"] = self.enable_direct_upload
+        rval["direct_upload_expires_in"] = self.direct_upload_expires_in
         rval["object_expires_after_days"] = self.object_expires_after_days
         return rval
 
@@ -1011,6 +1114,15 @@ class ConcreteObjectStore(BaseObjectStore):
         return self._get_object_url(  # type: ignore[attr-defined]
             obj, content_disposition=content_disposition, content_type=content_type, **kwargs
         )
+
+    def _get_upload_target(self, obj, size: int, **kwargs) -> UploadTarget | None:
+        if not self.enable_direct_upload:
+            return None
+        return self._upload_target(obj, size, **kwargs)
+
+    def _upload_target(self, obj, size: int, **kwargs) -> UploadTarget | None:
+        # Stores whose backend takes no direct uploads get this no-op default.
+        return None
 
     def _get_concrete_store_badges(self, obj) -> list[BadgeDict]:
         return serialize_badges(
@@ -1483,6 +1595,13 @@ class NestedObjectStore(BaseObjectStore):
     def _get_object_url(self, obj, **kwargs):
         """For the first backend that has this `obj`, get its URL."""
         return self._call_method("_get_object_url", obj, None, False, **kwargs)
+
+    def _get_upload_target(self, obj, size: int, **kwargs) -> UploadTarget | None:
+        """Get an upload target from the backend that holds, or is to hold, this `obj`."""
+        return self._call_method("_get_upload_target", obj, None, False, size=size, **kwargs)
+
+    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], **kwargs) -> None:
+        self._call_method("_complete_upload", obj, ObjectNotFound, True, upload_id=upload_id, parts=parts, **kwargs)
 
     def _get_direct_download_url(self, obj, content_disposition=None, content_type=None, **kwargs) -> str | None:
         """For the first backend that has this `obj`, get its direct download URL."""

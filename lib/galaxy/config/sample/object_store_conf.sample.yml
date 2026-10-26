@@ -204,6 +204,15 @@ bucket:
 # bucket endpoint must be reachable by clients, and anyone with the URL can fetch the object until it
 # expires (~1 hour). Defaults to false.
 # enable_direct_download: true
+# When true, remote jobs can upload their outputs straight to this bucket through presigned URLs
+# Galaxy issues for each file, instead of through Galaxy: one PUT, or a multipart upload Galaxy
+# completes for files over the upload multipart threshold. The bucket endpoint must be reachable from
+# the compute nodes. Each URL writes one object of exactly one size, until it expires after
+# direct_upload_expires_in seconds (default 86400 - the parts of a large file are uploaded in turn).
+# Give the bucket an AbortIncompleteMultipartUpload lifecycle rule to clear the parts of uploads that
+# never complete. Defaults to false.
+# enable_direct_upload: true
+# direct_upload_expires_in: 86400
 connection:  # not strictly needed but more of the API works with this.
   region: us-east-1
 transfer:

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 from collections.abc import Callable
+from functools import cached_property
 from typing import (
     Any,
     ClassVar,
@@ -35,6 +36,13 @@ from galaxy.util import (
     chunk_iterable,
 )
 from galaxy.util.s3_checksum import s3_checksum_config_kwargs
+from . import (
+    CompletedPart,
+    MultipartUploadTarget,
+    PutUploadTarget,
+    UploadPart,
+    UploadTarget,
+)
 from ._caching_base import (
     CachingConcreteObjectStore,
     RemoteDataStream,
@@ -53,6 +61,10 @@ NO_BOTO_ERROR_MESSAGE = (
 )
 
 # XML 1.0 forbids these characters; CR is also unsafe because XML normalizes it to LF.
+# S3 limits: one PUT carries at most 5 GiB, and a multipart upload has at most 10,000 parts.
+MAX_PUT_SIZE = 5 * 1024**3
+MAX_PARTS = 10000
+
 _UNSAFE_XML_KEY_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\ud800-\udfff\ufffe\uffff]")
 
 log = logging.getLogger(__name__)
@@ -143,6 +155,7 @@ def parse_config_xml(config_xml):
             "enable_direct_download": CachingConcreteObjectStore.parse_enable_direct_download_from_config_xml(
                 config_xml
             ),
+            **CachingConcreteObjectStore.parse_direct_upload_from_config_xml(config_xml),
         }
         name = config_xml.attrib.get("name", None)
         if name is not None:
@@ -253,7 +266,7 @@ class S3ObjectStore(CachingConcreteObjectStore):
                 self.region = region
             self._init_client()
 
-    def _client_kwds(self) -> "S3ClientConstructorKwds":
+    def _client_kwds(self, **config_kwargs: Any) -> "S3ClientConstructorKwds":
         # Build the keyword arguments for boto3.client based on current args.
         # If access_key is empty use default credential chain.
         kwds: S3ClientConstructorKwds = {
@@ -266,12 +279,19 @@ class S3ObjectStore(CachingConcreteObjectStore):
         if self.access_key:
             kwds["aws_access_key_id"] = self.access_key
             kwds["aws_secret_access_key"] = self.secret_key
-        if config_kwargs := s3_checksum_config_kwargs(self.endpoint_url):
+        config_kwargs.update(s3_checksum_config_kwargs(self.endpoint_url))
+        if config_kwargs:
             kwds["config"] = Config(**config_kwargs)
         return kwds
 
     def _init_client(self):
         self._client = boto3.client(**self._client_kwds())
+
+    @cached_property
+    def _upload_signing_client(self):
+        # SigV4 signs a presigned upload's Content-Length; botocore presigns with SigV2,
+        # which does not, for us-east-1 and custom endpoints.
+        return boto3.client(**self._client_kwds(signature_version="s3v4"))
 
     @property
     def _bucket_exists(self) -> bool:
@@ -477,6 +497,40 @@ class S3ObjectStore(CachingConcreteObjectStore):
         except ClientError:
             log.exception("Failed to generate URL for dataset.")
         return None
+
+    def _upload_target(self, obj, size: int, **kwargs) -> UploadTarget:
+        key = self._construct_path(obj, **kwargs)
+        config = self._transfer_config("upload")
+        if size <= min(config.multipart_threshold, MAX_PUT_SIZE):
+            return PutUploadTarget(url=self._presign_upload("put_object", Key=key, ContentLength=size))
+        upload_id = self._client.create_multipart_upload(Bucket=self.bucket, Key=key)["UploadId"]
+        part_size = max(config.multipart_chunksize, -(-size // MAX_PARTS))
+        parts = []
+        for part_number, offset in enumerate(range(0, size, part_size), start=1):
+            part_bytes = min(part_size, size - offset)
+            url = self._presign_upload(
+                "upload_part", Key=key, UploadId=upload_id, PartNumber=part_number, ContentLength=part_bytes
+            )
+            parts.append(UploadPart(part_number=part_number, url=url, offset=offset, size=part_bytes))
+        return MultipartUploadTarget(upload_id=upload_id, parts=parts)
+
+    def _presign_upload(self, client_method: str, **params: Any) -> str:
+        # ContentLength is signed: the store refuses an upload of any other size.
+        return self._upload_signing_client.generate_presigned_url(
+            ClientMethod=client_method,
+            Params={"Bucket": self.bucket, **params},
+            ExpiresIn=self.direct_upload_expires_in,
+            HttpMethod="PUT",
+        )
+
+    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], **kwargs) -> None:
+        ordered = sorted(parts, key=lambda part: part["part_number"])
+        self._client.complete_multipart_upload(
+            Bucket=self.bucket,
+            Key=self._construct_path(obj, **kwargs),
+            UploadId=upload_id,
+            MultipartUpload={"Parts": [{"PartNumber": part["part_number"], "ETag": part["etag"]} for part in ordered]},
+        )
 
     def _get_store_usage_percent(self, obj):
         return 0.0
