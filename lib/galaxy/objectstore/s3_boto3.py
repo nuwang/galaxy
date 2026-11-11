@@ -31,7 +31,10 @@ except ImportError:
     TransferConfig = None  # type: ignore[assignment,unused-ignore,misc]
     Config = None  # type: ignore[assignment,unused-ignore,misc]
 
-from galaxy.exceptions import ObjectNotFound
+from galaxy.exceptions import (
+    ObjectNotFound,
+    RequestParameterInvalidException,
+)
 from galaxy.util import (
     asbool,
     chunk_iterable,
@@ -546,6 +549,9 @@ class S3ObjectStore(CachingConcreteObjectStore):
         )
 
     def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], **kwargs) -> None:
+        if any(not part["etag"] for part in parts):
+            # S3 answers every part's upload with one, and checks it here.
+            raise RequestParameterInvalidException("Every part of an S3 upload must be reported with its ETag.")
         ordered = sorted(parts, key=lambda part: part["part_number"])
         self._client.complete_multipart_upload(
             Bucket=self.bucket,

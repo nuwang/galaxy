@@ -34,6 +34,7 @@ from requests import get
 from galaxy.exceptions import (
     ObjectInvalid,
     ObjectNotFound,
+    RequestParameterInvalidException,
 )
 from galaxy.objectstore import (
     DeviceSourceMap,
@@ -1211,6 +1212,17 @@ def test_complete_upload_completes_the_multipart_upload_in_part_order():
             UploadId="upload-1",
             MultipartUpload={"Parts": [{"PartNumber": 1, "ETag": '"a"'}, {"PartNumber": 2, "ETag": '"b"'}]},
         )
+
+
+@patch_object_stores_to_skip_initialize
+def test_complete_upload_refuses_a_part_without_an_etag():
+    # S3 answers every part's upload with an ETag, and checks it when completing.
+    with TestConfig(BOTO3_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        client = _mock_boto3_client(object_store)
+
+        with pytest.raises(RequestParameterInvalidException):
+            object_store.complete_upload(MockDataset(1), "upload-1", [{"part_number": 1, "etag": None}])
+        client.complete_multipart_upload.assert_not_called()
 
 
 @patch_object_stores_to_skip_initialize

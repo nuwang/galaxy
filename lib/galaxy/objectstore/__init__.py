@@ -114,10 +114,10 @@ class UploadPart(TypedDict):
 
 
 class CompletedPart(TypedDict):
-    """An uploaded part: its number and the ETag the store answered its PUT with."""
+    """An uploaded part: its number and the ETag the store answered its PUT with, if it answered with one."""
 
     part_number: int
-    etag: str
+    etag: str | None
 
 
 @dataclass(frozen=True)
