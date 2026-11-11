@@ -84,7 +84,8 @@ class OutputTargetsResponse(BaseModel):
 
 class UploadedPart(BaseModel):
     part_number: int = Field(ge=1)
-    etag: str
+    # Null for a part whose upload was answered without one, as Azure answers a block's.
+    etag: str | None
 
 
 class CompleteUploadRequest(BaseModel):

@@ -10,6 +10,7 @@ import pytest
 
 from galaxy import exceptions
 from galaxy.managers.job_output_staging import (
+    CompleteUploadRequest,
     JobOutputStagingManager,
     output_targets_url,
     StagedOutputFile,
@@ -158,6 +159,13 @@ def test_multipart_target_is_completed_through_galaxy(app, manager):
 
     (obj, upload_id, uploaded_parts), location = complete_upload.call_args
     assert (obj.uuid, upload_id, uploaded_parts, location) == (_dataset(output).uuid, "upload-1", completed, {})
+
+
+def test_a_part_reported_without_an_etag_is_left_to_the_store():
+    # Azure answers a part's upload without an ETag; stores whose parts have one refuse to complete without it.
+    request = CompleteUploadRequest.model_validate({"parts": [{"part_number": 1, "etag": None}]})
+
+    assert request.parts[0].etag is None
 
 
 def test_new_dataset_with_an_unused_uuid_is_uploaded(app, manager):
