@@ -40,9 +40,7 @@ from galaxy.util.s3_checksum import s3_checksum_config_kwargs
 from . import (
     CompletedPart,
     MultipartUploadTarget,
-    PutUploadTarget,
     UploadPart,
-    UploadTarget,
 )
 from ._caching_base import (
     CachingConcreteObjectStore,
@@ -62,8 +60,8 @@ NO_BOTO_ERROR_MESSAGE = (
 )
 
 # XML 1.0 forbids these characters; CR is also unsafe because XML normalizes it to LF.
-# S3 limits: one PUT carries at most 5 GiB, and a multipart upload has at most 10,000 parts.
-MAX_PUT_SIZE = 5 * 1024**3
+# S3 limits: a part carries at most 5 GiB, and a multipart upload has at most 10,000 parts.
+MAX_PART_SIZE = 5 * 1024**3
 MAX_PARTS = 10000
 
 _UNSAFE_XML_KEY_CHARACTERS = re.compile(r"[\x00-\x08\x0b-\x1f\ud800-\udfff\ufffe\uffff]")
@@ -520,13 +518,15 @@ class S3ObjectStore(CachingConcreteObjectStore):
             log.exception("Failed to generate URL for dataset.")
         return None
 
-    def _upload_target(self, obj, size: int, **kwargs) -> UploadTarget:
+    def _upload_target(self, obj, size: int, **kwargs) -> MultipartUploadTarget | None:
+        # Always a multipart upload, even of one part: completing it retires its part URLs, where a
+        # presigned PUT could replace the object until it expired. A part can't be empty.
+        if size <= 0:
+            return None
         key = self._construct_path(obj, **kwargs)
         config = self._transfer_config("upload")
-        if size <= min(config.multipart_threshold, MAX_PUT_SIZE):
-            return PutUploadTarget(url=self._presign_upload("put_object", Key=key, ContentLength=size))
         upload_id = self._client.create_multipart_upload(Bucket=self.bucket, Key=key)["UploadId"]
-        part_size = max(config.multipart_chunksize, -(-size // MAX_PARTS))
+        part_size = min(max(config.multipart_chunksize, -(-size // MAX_PARTS)), MAX_PART_SIZE)
         parts = []
         for part_number, offset in enumerate(range(0, size, part_size), start=1):
             part_bytes = min(part_size, size - offset)

@@ -26,7 +26,6 @@ from galaxy.model.unittest_utils import (
 )
 from galaxy.objectstore import (
     MultipartUploadTarget,
-    PutUploadTarget,
     UploadPart,
 )
 
@@ -138,18 +137,6 @@ def test_output_is_uploaded_through_galaxy_when_the_store_takes_no_direct_upload
     assert _stored(app, _dataset(output)) == CONTENT
 
 
-def test_presigned_put_target_is_passed_on(app, manager):
-    output = _hda(app)
-    job = _running_job(app, output)
-    put = PutUploadTarget(url="https://bucket.example/presigned")
-    with mock.patch.object(app.object_store, "get_upload_target", return_value=put) as get_upload_target:
-        [target] = manager.issue_targets(files=[_file(_dataset(output).uuid)], **_targets_request(app, job))
-
-    assert target == {"type": "put", "url": "https://bucket.example/presigned"}
-    (obj, size), location = get_upload_target.call_args
-    assert (obj.uuid, size, location) == (_dataset(output).uuid, len(CONTENT), {})
-
-
 def test_multipart_target_is_completed_through_galaxy(app, manager):
     output = _hda(app)
     job = _running_job(app, output)
@@ -158,10 +145,12 @@ def test_multipart_target_is_completed_through_galaxy(app, manager):
         UploadPart(part_number=2, url="https://bucket.example/2", offset=10, size=5),
     ]
     multipart = MultipartUploadTarget(upload_id="upload-1", parts=parts)
-    with mock.patch.object(app.object_store, "get_upload_target", return_value=multipart):
+    with mock.patch.object(app.object_store, "get_upload_target", return_value=multipart) as get_upload_target:
         [target] = manager.issue_targets(files=[_file(_dataset(output).uuid, size=15)], **_targets_request(app, job))
     assert target["type"] == "multipart"
     assert target["parts"] == parts
+    (obj, size), location = get_upload_target.call_args
+    assert (obj.uuid, size, location) == (_dataset(output).uuid, 15, {})
 
     completed = [{"part_number": 1, "etag": '"a"'}, {"part_number": 2, "etag": '"b"'}]
     with mock.patch.object(app.object_store, "complete_upload") as complete_upload:

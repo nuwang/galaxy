@@ -44,8 +44,6 @@ from galaxy.model.scoped_session import galaxy_scoped_session
 from galaxy.objectstore import (
     BaseObjectStore,
     CompletedPart,
-    MultipartUploadTarget,
-    PutUploadTarget,
 )
 from galaxy.security.idencoding import IdEncodingHelper
 from galaxy.security.staging_signer import StagingUrlSigner
@@ -264,9 +262,7 @@ class JobOutputStagingManager:
 
     def _target(self, job_id: int, staged: StagedObject, size: int, upload_expires: int) -> dict[str, Any]:
         upload_target = self._object_store.get_upload_target(staged.model_object(), size, **staged.location)
-        if isinstance(upload_target, PutUploadTarget):
-            return {"type": "put", "url": upload_target.url}
-        if isinstance(upload_target, MultipartUploadTarget):
+        if upload_target is not None:
             payload = {**staged.to_dict(), "upload_id": upload_target.upload_id}
             return {
                 "type": "multipart",
