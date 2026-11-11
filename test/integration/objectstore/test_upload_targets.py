@@ -1,4 +1,4 @@
-"""Clients upload straight to a boto3 object store through the targets it issues.
+"""Clients upload straight to a boto3 or cloud object store through the targets it issues.
 
 Runs against a disposable SeaweedFS container: each target is used the way a
 remote job runner uses it, with plain HTTP and no storage credentials, and what
@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 import requests
 
+from galaxy.exceptions import RequestParameterInvalidException
 from galaxy.objectstore import MultipartUploadTarget
 from galaxy.objectstore.unittest_utils import Config as TestConfig
 from galaxy_test.driver.integration_util import (
@@ -67,9 +68,17 @@ def seaweedfs():
     docker_rm(container_name)
 
 
-@pytest.fixture
-def object_store(seaweedfs):
-    with TestConfig(DIRECT_UPLOAD_CONFIG, store_by="uuid") as (_, object_store):
+# The cloud store reaches SeaweedFS through cloudbridge's AWS provider; SigV4 signs each part's size.
+CLOUD_DIRECT_UPLOAD_CONFIG = (
+    DIRECT_UPLOAD_CONFIG.replace("type: boto3", "type: cloud\nprovider: aws")
+    .replace("connection:\n", "connection:\n  signature_version: s3v4\n")
+    .replace(f"  upload_multipart_threshold: {5 * MiB}\n", "")
+)
+
+
+@pytest.fixture(params=[DIRECT_UPLOAD_CONFIG, CLOUD_DIRECT_UPLOAD_CONFIG], ids=["boto3", "cloud"])
+def object_store(seaweedfs, request):
+    with TestConfig(request.param, store_by="uuid") as (_, object_store):
         yield object_store
 
 
@@ -84,11 +93,15 @@ def _upload(object_store, obj, contents, **location) -> list[str]:
     assert isinstance(target, MultipartUploadTarget)
     completed = []
     for part in target.parts:
-        response = requests.put(part["url"], data=contents[part["offset"] : part["offset"] + part["size"]])
+        response = _put_part(part, contents[part["offset"] : part["offset"] + part["size"]])
         response.raise_for_status()
         completed.append({"part_number": part["part_number"], "etag": response.headers["ETag"]})
-    object_store.complete_upload(obj, target.upload_id, completed, **location)
+    object_store.complete_upload(obj, target.upload_id, completed, len(contents), **location)
     return [part["url"] for part in target.parts]
+
+
+def _put_part(part, data):
+    return requests.put(part["url"], data=data, headers=part.get("headers"))
 
 
 @skip_unless_docker()
@@ -122,7 +135,7 @@ def test_part_url_refuses_an_upload_of_another_size(object_store):
     target = object_store.get_upload_target(obj, size=len(contents))
 
     assert isinstance(target, MultipartUploadTarget)
-    response = requests.put(target.parts[0]["url"], data=contents + b"and more\n")
+    response = _put_part(target.parts[0], contents + b"and more\n")
     assert response.status_code == 403, response.text
     assert not object_store.exists(obj)
 
@@ -147,3 +160,16 @@ def test_large_object_is_uploaded_in_parts(object_store):
 
     stored = _stored_bytes(object_store, obj)
     assert hashlib.sha256(stored).hexdigest() == hashlib.sha256(contents).hexdigest()
+
+
+@skip_unless_docker()
+def test_part_reported_without_its_etag_is_refused(object_store):
+    obj = StoredObject()
+    contents = b"what the job uploaded\n"
+    target = object_store.get_upload_target(obj, size=len(contents))
+    assert isinstance(target, MultipartUploadTarget)
+    _put_part(target.parts[0], contents).raise_for_status()
+
+    with pytest.raises(RequestParameterInvalidException):
+        object_store.complete_upload(obj, target.upload_id, [{"part_number": 1, "etag": None}], len(contents))
+    assert not object_store.exists(obj)

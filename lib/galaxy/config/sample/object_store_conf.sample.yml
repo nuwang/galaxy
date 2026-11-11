@@ -432,6 +432,11 @@ provider: aws
 # Redirect dataset downloads to a short-lived presigned URL instead of streaming
 # through Galaxy's cache. See the boto3 example above for the tradeoffs. Defaults to false.
 # enable_direct_download: true
+# Let remote jobs upload their outputs straight to the store, as for the boto3 example above, with
+# any provider. Until they expire, an azure upload URL can still replace a completed output, and an
+# openstack one can corrupt it. Defaults to false.
+# enable_direct_upload: true
+# direct_upload_expires_in: 86400
 auth:
   # Omit both keys to use the environment or the instance role instead.
   access_key: ...
