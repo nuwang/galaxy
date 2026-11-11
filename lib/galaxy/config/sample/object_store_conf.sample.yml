@@ -437,6 +437,14 @@ provider: aws
 # Redirect dataset downloads to a short-lived presigned URL instead of streaming
 # through Galaxy's cache. See the boto3 example above for the tradeoffs. Defaults to false.
 # enable_direct_download: true
+# Let remote jobs upload their outputs straight to the store, as for the boto3 example above, with
+# every provider: a multipart upload in parts of upload_multipart_chunksize (default 50 MiB), which
+# Galaxy completes. AWS (with signature_version s3v4) and google part URLs refuse a part of another
+# size; azure and openstack ones can't, so Galaxy checks the parts' sizes before completing. Until it
+# expires, an azure part URL can still replace the whole blob after Galaxy has completed the upload,
+# and an openstack one can rewrite its segment, after which the object fails to read. Defaults to false.
+# enable_direct_upload: true
+# direct_upload_expires_in: 86400
 auth:
   # Omit both keys to use the environment or the instance role instead.
   access_key: ...

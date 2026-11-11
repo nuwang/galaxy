@@ -11,7 +11,13 @@ from typing import (
     Optional,
 )
 
+from galaxy.exceptions import RequestParameterInvalidException
 from galaxy.util import asbool
+from . import (
+    CompletedPart,
+    MultipartUploadTarget,
+    UploadPart,
+)
 from ._caching_base import (
     CachingConcreteObjectStore,
     RemoteDataStream,
@@ -36,12 +42,16 @@ try:
         CloudProviderFactory,
         ProviderList,
     )
-    from cloudbridge.interfaces.exceptions import InvalidNameException
+    from cloudbridge.interfaces.exceptions import (
+        InvalidNameException,
+        InvalidPartException,
+    )
     from cloudbridge.interfaces.resources import TransferConfig
 except ImportError:
     CloudProviderFactory = None  # type: ignore[assignment,misc,unused-ignore]
     ProviderList = None  # type: ignore[assignment,misc,unused-ignore]
     TransferConfig = None  # type: ignore[assignment,misc,unused-ignore]
+    InvalidPartException = None  # type: ignore[assignment,misc,unused-ignore]
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +69,11 @@ ALL_TRANSFER_OPTION_KEYS = tuple(
 # Providers reject multipart upload parts smaller than 5 MiB (except the final
 # part); ranged downloads have no minimum.
 MIN_MULTIPART_CHUNKSIZE = 5 * 1024 * 1024
+# The parts of a direct upload, as cloudbridge sizes them when not configured, within every provider's
+# limits: Swift holds 1,000 segments in a large object by default, and Azure 4,000 MiB in a block.
+DEFAULT_DIRECT_UPLOAD_PART_SIZE = 50 * 1024 * 1024
+MAX_DIRECT_UPLOAD_PARTS = 1000
+MAX_DIRECT_UPLOAD_PART_SIZE = 4000 * 1024 * 1024
 
 
 class Cloud(CachingConcreteObjectStore):
@@ -161,6 +176,7 @@ class Cloud(CachingConcreteObjectStore):
         # such provider-specific configuration is overwritten in the
         # following.
         config = parse_config_xml(config_xml)
+        config.update(CachingConcreteObjectStore.parse_direct_upload_from_config_xml(config_xml))
 
         if (transfer_element := config_xml.find("transfer")) is not None:
             config["transfer"] = {
@@ -394,6 +410,41 @@ class Cloud(CachingConcreteObjectStore):
             except Exception:
                 log.exception("Trouble generating URL for dataset '%s'", rel_path)
         return None
+
+    def _upload_target(self, obj, size: int, **kwargs) -> MultipartUploadTarget | None:
+        # Always a multipart upload, even of one part: completing it retires its part URLs, where a
+        # presigned PUT could replace the object until it expired. A part can't be empty, and a file too
+        # large for the providers' limits goes through Galaxy.
+        transfer_config = self._transfer_config("upload")
+        configured_part_size = transfer_config.part_size if transfer_config else None
+        part_size = max(configured_part_size or DEFAULT_DIRECT_UPLOAD_PART_SIZE, -(-size // MAX_DIRECT_UPLOAD_PARTS))
+        if size <= 0 or part_size > MAX_DIRECT_UPLOAD_PART_SIZE:
+            return None
+        upload = self.bucket.objects.create_multipart_upload(self._construct_path(obj, **kwargs))
+        parts = []
+        for part_number, offset in enumerate(range(0, size, part_size), start=1):
+            part_bytes = min(part_size, size - offset)
+            request = upload.generate_part_url(part_number, self.direct_upload_expires_in, size=part_bytes)
+            part = UploadPart(part_number=part_number, url=request.url, offset=offset, size=part_bytes)
+            if request.headers:
+                part["headers"] = dict(request.headers)
+            parts.append(part)
+        return MultipartUploadTarget(upload_id=upload.id, parts=parts)
+
+    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], size: int, **kwargs) -> None:
+        upload = self.bucket.objects.get_multipart_upload(self._construct_path(obj, **kwargs), upload_id)
+        # Azure and Swift part URLs can't bind a part's size, so the parts must add up to the size Galaxy signed.
+        held = {part.part_number: part.size for part in upload.list_parts()}
+        held_size = sum(held.get(part["part_number"]) or 0 for part in parts)
+        if held_size != size:
+            raise RequestParameterInvalidException(
+                f"The parts of the upload hold {held_size} bytes, not the {size} Galaxy accepted."
+            )
+        ordered = sorted(parts, key=lambda part: part["part_number"])
+        try:
+            upload.complete([upload.reported_part(part["part_number"], part["etag"]) for part in ordered])
+        except InvalidPartException as e:
+            raise RequestParameterInvalidException(f"The store refused the parts of the upload: {e}")
 
     def _get_store_usage_percent(self, obj):
         return 0.0

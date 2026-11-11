@@ -548,17 +548,25 @@ class S3ObjectStore(CachingConcreteObjectStore):
             HttpMethod="PUT",
         )
 
-    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], **kwargs) -> None:
+    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], size: int, **kwargs) -> None:
+        # Each part URL signs its part's size, so the parts add up to ``size`` once S3 holds them as reported.
         if any(not part["etag"] for part in parts):
             # S3 answers every part's upload with one, and checks it here.
             raise RequestParameterInvalidException("Every part of an S3 upload must be reported with its ETag.")
         ordered = sorted(parts, key=lambda part: part["part_number"])
-        self._client.complete_multipart_upload(
-            Bucket=self.bucket,
-            Key=self._construct_path(obj, **kwargs),
-            UploadId=upload_id,
-            MultipartUpload={"Parts": [{"PartNumber": part["part_number"], "ETag": part["etag"]} for part in ordered]},
-        )
+        try:
+            self._client.complete_multipart_upload(
+                Bucket=self.bucket,
+                Key=self._construct_path(obj, **kwargs),
+                UploadId=upload_id,
+                MultipartUpload={
+                    "Parts": [{"PartNumber": part["part_number"], "ETag": part["etag"]} for part in ordered]
+                },
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("InvalidPart", "InvalidPartOrder"):
+                raise RequestParameterInvalidException(f"S3 refused the parts of the upload: {e}")
+            raise
 
     def _get_store_usage_percent(self, obj):
         return 0.0

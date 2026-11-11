@@ -30,6 +30,7 @@ from uuid import uuid4
 import yaml
 from pydantic import BaseModel
 from typing_extensions import (
+    NotRequired,
     Protocol,
 )
 
@@ -105,12 +106,13 @@ class ObjectStoreAuth:
 
 
 class UploadPart(TypedDict):
-    """A byte range of a multipart upload and the URL to PUT it to."""
+    """A byte range of a multipart upload, the URL to PUT it to, and any headers the PUT must send."""
 
     part_number: int
     url: str
     offset: int
     size: int
+    headers: NotRequired[dict[str, str]]
 
 
 class CompletedPart(TypedDict):
@@ -524,9 +526,20 @@ class ObjectStore(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def complete_upload(
-        self, obj, upload_id: str, parts: list[CompletedPart], extra_dir=None, extra_dir_at_root=False, alt_name=None
+        self,
+        obj,
+        upload_id: str,
+        parts: list[CompletedPart],
+        size: int,
+        extra_dir=None,
+        extra_dir_at_root=False,
+        alt_name=None,
     ) -> None:
-        """Finish a multipart upload ``get_upload_target`` issued for `obj`, from the parts as uploaded."""
+        """Finish a multipart upload ``get_upload_target`` issued for `obj` of ``size`` bytes, from the parts as uploaded.
+
+        Raises ``RequestParameterInvalidException`` when the store doesn't hold the parts as reported, or holds
+        parts that don't add up to ``size``.
+        """
         raise NotImplementedError()
 
     @abc.abstractmethod
@@ -963,19 +976,27 @@ class BaseObjectStore(ObjectStore):
         )
 
     def complete_upload(
-        self, obj, upload_id: str, parts: list[CompletedPart], extra_dir=None, extra_dir_at_root=False, alt_name=None
+        self,
+        obj,
+        upload_id: str,
+        parts: list[CompletedPart],
+        size: int,
+        extra_dir=None,
+        extra_dir_at_root=False,
+        alt_name=None,
     ) -> None:
         self._invoke(
             "complete_upload",
             obj,
             upload_id=upload_id,
             parts=parts,
+            size=size,
             extra_dir=extra_dir,
             extra_dir_at_root=extra_dir_at_root,
             alt_name=alt_name,
         )
 
-    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], **kwargs) -> None:
+    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], size: int, **kwargs) -> None:
         raise NotImplementedError(f"{type(self).__name__} issues no multipart uploads to complete.")
 
     def get_concrete_store_backends(self) -> list[ConcreteObjectStore]:
@@ -1678,8 +1699,10 @@ class NestedObjectStore(BaseObjectStore):
         """Get an upload target from the backend that holds, or is to hold, this `obj`."""
         return self._call_method("_get_upload_target", obj, None, False, size=size, **kwargs)
 
-    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], **kwargs) -> None:
-        self._call_method("_complete_upload", obj, ObjectNotFound, True, upload_id=upload_id, parts=parts, **kwargs)
+    def _complete_upload(self, obj, upload_id: str, parts: list[CompletedPart], size: int, **kwargs) -> None:
+        self._call_method(
+            "_complete_upload", obj, ObjectNotFound, True, upload_id=upload_id, parts=parts, size=size, **kwargs
+        )
 
     def _get_direct_download_url(self, obj, content_disposition=None, content_type=None, **kwargs) -> str | None:
         """For the first backend that has this `obj`, get its direct download URL."""

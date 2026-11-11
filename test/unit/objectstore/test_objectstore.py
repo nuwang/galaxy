@@ -27,6 +27,7 @@ from uuid import uuid4
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from requests import get
@@ -75,15 +76,18 @@ try:
     # where cloudbridge is not installed.
     from cloudbridge.base.resources import (
         BasePageableObjectMixin,
+        BasePresignedRequest,
         ClientPagedResultList,
     )
+    from cloudbridge.interfaces.exceptions import InvalidPartException
     from cloudbridge.interfaces.resources import (
         Bucket,
         BucketObject,
     )
     from cloudbridge.interfaces.subservices import BucketObjectSubService
 except ImportError:
-    BasePageableObjectMixin = ClientPagedResultList = None  # type: ignore[assignment,misc]
+    BasePageableObjectMixin = BasePresignedRequest = ClientPagedResultList = None  # type: ignore[assignment,misc]
+    InvalidPartException = None  # type: ignore[assignment,misc]
     Bucket = BucketObject = BucketObjectSubService = None  # type: ignore[assignment,misc]
 
 
@@ -1077,7 +1081,7 @@ def test_disk_store_issues_no_upload_targets():
 def test_store_issuing_no_multipart_uploads_refuses_to_complete_one():
     with TestConfig(DISK_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
         with pytest.raises(NotImplementedError):
-            object_store.complete_upload(MockDataset(1), "upload-1", [{"part_number": 1, "etag": '"a"'}])
+            object_store.complete_upload(MockDataset(1), "upload-1", [{"part_number": 1, "etag": '"a"'}], 1)
 
 
 @patch_object_stores_to_skip_initialize
@@ -1203,6 +1207,7 @@ def test_complete_upload_completes_the_multipart_upload_in_part_order():
             dataset,
             "upload-1",
             [{"part_number": 2, "etag": '"b"'}, {"part_number": 1, "etag": '"a"'}],
+            2,
             **location,
         )
 
@@ -1221,8 +1226,22 @@ def test_complete_upload_refuses_a_part_without_an_etag():
         client = _mock_boto3_client(object_store)
 
         with pytest.raises(RequestParameterInvalidException):
-            object_store.complete_upload(MockDataset(1), "upload-1", [{"part_number": 1, "etag": None}])
+            object_store.complete_upload(MockDataset(1), "upload-1", [{"part_number": 1, "etag": None}], 1)
         client.complete_multipart_upload.assert_not_called()
+
+
+@patch_object_stores_to_skip_initialize
+def test_complete_upload_refuses_parts_s3_does_not_hold_as_reported():
+    # S3 compares each part's reported ETag with the part it holds, which may have been replaced since.
+    with TestConfig(BOTO3_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        client = _mock_boto3_client(object_store)
+        client.complete_multipart_upload.side_effect = ClientError(
+            {"Error": {"Code": "InvalidPart", "Message": "The specified entity tag might not have matched."}},
+            "CompleteMultipartUpload",
+        )
+
+        with pytest.raises(RequestParameterInvalidException):
+            object_store.complete_upload(MockDataset(1), "upload-1", [{"part_number": 1, "etag": '"a"'}], 1)
 
 
 @patch_object_stores_to_skip_initialize
@@ -1243,7 +1262,7 @@ def test_distributed_store_completes_uploads_in_the_objects_backend():
         in_s3 = MockDataset(1)
         in_s3.object_store_id = "s3"
 
-        object_store.complete_upload(in_s3, "upload-1", [{"part_number": 1, "etag": '"a"'}])
+        object_store.complete_upload(in_s3, "upload-1", [{"part_number": 1, "etag": '"a"'}], 1)
 
         assert client.complete_multipart_upload.call_args.kwargs["UploadId"] == "upload-1"
 
@@ -2884,6 +2903,145 @@ def test_config_parse_cloud_direct_download():
 
             model = object_store.to_model("the_object_store_id")
             assert model.enable_direct_download is True
+
+
+CLOUD_DIRECT_UPLOAD_CONFIG_YAML = get_example("cloud_direct_upload.yml")
+
+
+@patch_object_stores_to_skip_initialize
+def test_config_parse_cloud_direct_upload():
+    for config_str in [get_example("cloud_direct_upload.xml"), CLOUD_DIRECT_UPLOAD_CONFIG_YAML]:
+        with TestConfig(config_str) as (directory, object_store):
+            assert object_store.enable_direct_upload is True
+            assert object_store.direct_upload_expires_in == 3600
+
+            as_dict = object_store.to_dict()
+            _assert_key_has_value(as_dict, "enable_direct_upload", True)
+            _assert_key_has_value(as_dict, "direct_upload_expires_in", 3600)
+
+
+class _CloudUpload:
+    """A cloudbridge multipart upload: signs each part's PUT, and lists the parts the provider holds."""
+
+    def __init__(self, held_sizes=None, headers=None):
+        self.id = "upload-1"
+        self.held_sizes = held_sizes or {}
+        self.headers = headers or {}
+        self.completed = None
+        self.complete_error = None
+
+    def generate_part_url(self, part_number, expires_in, size=None):
+        url = f"https://bucket.example/part-{part_number}?expires={expires_in}&size={size}"
+        return BasePresignedRequest("PUT", url, headers=self.headers)
+
+    def list_parts(self):
+        return [SimpleNamespace(part_number=n, size=size) for n, size in sorted(self.held_sizes.items())]
+
+    def reported_part(self, part_number, etag):
+        return (part_number, etag)
+
+    def complete(self, parts):
+        if self.complete_error:
+            raise self.complete_error
+        self.completed = parts
+
+
+def _cloud_store_with_upload(object_store, upload):
+    object_store.bucket = MagicMock()
+    object_store.bucket.objects.create_multipart_upload.return_value = upload
+    object_store.bucket.objects.get_multipart_upload.return_value = upload
+    return object_store.bucket
+
+
+@patch_object_stores_to_skip_initialize
+def test_cloud_upload_target_passes_on_each_parts_signed_request():
+    # GCS signs a header binding the part's size, which the uploader must send.
+    with TestConfig(CLOUD_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        upload = _CloudUpload(headers={"x-goog-content-length-range": "1024,1024"})
+        bucket = _cloud_store_with_upload(object_store, upload)
+        dataset = MockDataset(1)
+
+        target = object_store.get_upload_target(dataset, size=1024)
+
+        bucket.objects.create_multipart_upload.assert_called_once_with(object_store._construct_path(dataset))
+        assert target == MultipartUploadTarget(
+            upload_id="upload-1",
+            parts=[
+                {
+                    "part_number": 1,
+                    "url": "https://bucket.example/part-1?expires=3600&size=1024",
+                    "offset": 0,
+                    "size": 1024,
+                    "headers": {"x-goog-content-length-range": "1024,1024"},
+                }
+            ],
+        )
+
+
+@patch_object_stores_to_skip_initialize
+def test_cloud_upload_parts_stay_within_every_providers_limits():
+    # Swift holds 1,000 segments in a large object by default, and Azure 4,000 MiB in a block.
+    with TestConfig(CLOUD_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        _cloud_store_with_upload(object_store, _CloudUpload())
+        size = 100 * GiB + 1
+
+        target = object_store.get_upload_target(MockDataset(1), size=size)
+
+        assert isinstance(target, MultipartUploadTarget)
+        assert len(target.parts) <= 1000
+        assert max(part["size"] for part in target.parts) <= 4000 * MiB
+        _assert_parts_tile(target.parts, size)
+        assert object_store.get_upload_target(MockDataset(2), size=1000 * 4000 * MiB + 1) is None
+
+
+@patch_object_stores_to_skip_initialize
+def test_cloud_store_issues_no_upload_target_for_an_empty_object():
+    with TestConfig(CLOUD_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        bucket = _cloud_store_with_upload(object_store, _CloudUpload())
+
+        assert object_store.get_upload_target(MockDataset(1), size=0) is None
+        bucket.objects.create_multipart_upload.assert_not_called()
+
+
+@patch_object_stores_to_skip_initialize
+def test_cloud_complete_upload_completes_from_the_reported_parts():
+    with TestConfig(CLOUD_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        upload = _CloudUpload(held_sizes={1: 8, 2: 2})
+        bucket = _cloud_store_with_upload(object_store, upload)
+        dataset = MockDataset(1)
+
+        # Azure answers a block's upload without an ETag.
+        object_store.complete_upload(
+            dataset, "upload-1", [{"part_number": 2, "etag": None}, {"part_number": 1, "etag": '"a"'}], 10
+        )
+
+        bucket.objects.get_multipart_upload.assert_called_once_with(object_store._construct_path(dataset), "upload-1")
+        assert upload.completed == [(1, '"a"'), (2, None)]
+
+
+@patch_object_stores_to_skip_initialize
+def test_cloud_complete_upload_refuses_parts_of_another_size_than_galaxy_signed():
+    # Azure and Swift part URLs can't bind a size, so the parts are checked before completing.
+    with TestConfig(CLOUD_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        upload = _CloudUpload(held_sizes={1: 8, 2: 2000})
+        _cloud_store_with_upload(object_store, upload)
+
+        with pytest.raises(RequestParameterInvalidException):
+            object_store.complete_upload(
+                MockDataset(1), "upload-1", [{"part_number": 1, "etag": '"a"'}, {"part_number": 2, "etag": '"b"'}], 10
+            )
+        assert upload.completed is None
+
+
+@patch_object_stores_to_skip_initialize
+def test_cloud_complete_upload_refuses_parts_the_provider_does_not_hold_as_reported():
+    with TestConfig(CLOUD_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        upload = _CloudUpload(held_sizes={1: 10})
+        upload.complete_error = InvalidPartException("replaced since its upload")
+        _cloud_store_with_upload(object_store, upload)
+
+        with pytest.raises(RequestParameterInvalidException):
+            object_store.complete_upload(MockDataset(1), "upload-1", [{"part_number": 1, "etag": '"a"'}], 10)
 
 
 @patch_object_stores_to_skip_initialize

@@ -166,7 +166,9 @@ class JobOutputStagingManager:
     ) -> None:
         payload = self._verified_upload(job_id, "complete", target, expires, signature)
         staged = StagedObject.from_dict(payload)
-        self._object_store.complete_upload(staged.model_object(), payload["upload_id"], parts, **staged.location)
+        self._object_store.complete_upload(
+            staged.model_object(), payload["upload_id"], parts, payload["size"], **staged.location
+        )
 
     def start_object_upload(self, job_id: int, target: str, expires: int, signature: str) -> ObjectUpload:
         payload = self._verified_upload(job_id, "object", target, expires, signature)
@@ -264,7 +266,7 @@ class JobOutputStagingManager:
     def _target(self, job_id: int, staged: StagedObject, size: int, upload_expires: int) -> dict[str, Any]:
         upload_target = self._object_store.get_upload_target(staged.model_object(), size, **staged.location)
         if upload_target is not None:
-            payload = {**staged.to_dict(), "upload_id": upload_target.upload_id}
+            payload = {**staged.to_dict(), "upload_id": upload_target.upload_id, "size": size}
             return {
                 "type": "multipart",
                 "parts": [dict(part) for part in upload_target.parts],

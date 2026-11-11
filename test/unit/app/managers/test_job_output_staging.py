@@ -157,8 +157,14 @@ def test_multipart_target_is_completed_through_galaxy(app, manager):
     with mock.patch.object(app.object_store, "complete_upload") as complete_upload:
         manager.complete_upload(parts=completed, **_galaxy_upload_request(job, target["complete_url"]))
 
-    (obj, upload_id, uploaded_parts), location = complete_upload.call_args
-    assert (obj.uuid, upload_id, uploaded_parts, location) == (_dataset(output).uuid, "upload-1", completed, {})
+    (obj, upload_id, uploaded_parts, size), location = complete_upload.call_args
+    assert (obj.uuid, upload_id, uploaded_parts, size, location) == (
+        _dataset(output).uuid,
+        "upload-1",
+        completed,
+        15,
+        {},
+    )
 
 
 def test_a_part_reported_without_an_etag_is_left_to_the_store():
