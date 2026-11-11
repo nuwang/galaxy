@@ -12,10 +12,7 @@ from uuid import uuid4
 import pytest
 import requests
 
-from galaxy.objectstore import (
-    MultipartUploadTarget,
-    PutUploadTarget,
-)
+from galaxy.objectstore import MultipartUploadTarget
 from galaxy.objectstore.unittest_utils import Config as TestConfig
 from galaxy_test.driver.integration_util import (
     docker_rm,
@@ -81,59 +78,72 @@ def _stored_bytes(object_store, obj, **location):
         return f.read()
 
 
-@skip_unless_docker()
-def test_put_target_stores_the_upload(object_store):
-    obj = StoredObject()
-    contents = b"uploaded straight to the store\n"
-
-    target = object_store.get_upload_target(obj, size=len(contents))
-
-    assert isinstance(target, PutUploadTarget)
-    requests.put(target.url, data=contents).raise_for_status()
-    assert _stored_bytes(object_store, obj) == contents
-
-
-@skip_unless_docker()
-def test_put_target_refuses_an_upload_of_another_size(object_store):
-    obj = StoredObject()
-    contents = b"the size Galaxy signed\n"
-
-    target = object_store.get_upload_target(obj, size=len(contents))
-
-    assert isinstance(target, PutUploadTarget)
-    response = requests.put(target.url, data=contents + b"and more\n")
-    assert response.status_code == 403, response.text
-    assert not object_store.exists(obj)
-
-
-@skip_unless_docker()
-def test_put_target_stores_a_file_with_its_object(object_store):
-    obj = StoredObject()
-    location = {"extra_dir": f"dataset_{obj.uuid}_files/sub", "alt_name": "part.txt"}
-    contents = b"an extra file\n"
-
+def _upload(object_store, obj, contents, **location) -> list[str]:
+    """Upload ``contents`` through the target the store issues, as a remote job runner does; return its URLs."""
     target = object_store.get_upload_target(obj, size=len(contents), **location)
-
-    assert isinstance(target, PutUploadTarget)
-    requests.put(target.url, data=contents).raise_for_status()
-    assert _stored_bytes(object_store, obj, **location) == contents
-
-
-@skip_unless_docker()
-def test_multipart_target_stores_the_upload_once_completed(object_store):
-    obj = StoredObject()
-    contents = os.urandom(11 * MiB)
-
-    target = object_store.get_upload_target(obj, size=len(contents))
-
     assert isinstance(target, MultipartUploadTarget)
-    assert len(target.parts) == 3
     completed = []
     for part in target.parts:
         response = requests.put(part["url"], data=contents[part["offset"] : part["offset"] + part["size"]])
         response.raise_for_status()
         completed.append({"part_number": part["part_number"], "etag": response.headers["ETag"]})
-    object_store.complete_upload(obj, target.upload_id, completed)
+    object_store.complete_upload(obj, target.upload_id, completed, **location)
+    return [part["url"] for part in target.parts]
+
+
+@skip_unless_docker()
+def test_upload_urls_cannot_replace_the_object_once_uploaded(object_store):
+    # The URLs work until they expire, long after Galaxy has imported the output.
+    obj = StoredObject()
+    contents = b"what the job uploaded\n"
+    urls = _upload(object_store, obj, contents)
+
+    for url in urls:
+        requests.put(url, data=b"what replaced it later\n"[: len(contents)])
+
+    assert object_store.get_data_head(obj, 1024) == contents
+
+
+@skip_unless_docker()
+def test_small_object_is_uploaded_in_one_part(object_store):
+    obj = StoredObject()
+    contents = b"uploaded straight to the store\n"
+
+    assert len(_upload(object_store, obj, contents)) == 1
+
+    assert _stored_bytes(object_store, obj) == contents
+
+
+@skip_unless_docker()
+def test_part_url_refuses_an_upload_of_another_size(object_store):
+    obj = StoredObject()
+    contents = b"the size Galaxy signed\n"
+
+    target = object_store.get_upload_target(obj, size=len(contents))
+
+    assert isinstance(target, MultipartUploadTarget)
+    response = requests.put(target.parts[0]["url"], data=contents + b"and more\n")
+    assert response.status_code == 403, response.text
+    assert not object_store.exists(obj)
+
+
+@skip_unless_docker()
+def test_upload_stores_a_file_with_its_object(object_store):
+    obj = StoredObject()
+    location = {"extra_dir": f"dataset_{obj.uuid}_files/sub", "alt_name": "part.txt"}
+    contents = b"an extra file\n"
+
+    _upload(object_store, obj, contents, **location)
+
+    assert _stored_bytes(object_store, obj, **location) == contents
+
+
+@skip_unless_docker()
+def test_large_object_is_uploaded_in_parts(object_store):
+    obj = StoredObject()
+    contents = os.urandom(11 * MiB)
+
+    assert len(_upload(object_store, obj, contents)) == 3
 
     stored = _stored_bytes(object_store, obj)
     assert hashlib.sha256(stored).hexdigest() == hashlib.sha256(contents).hexdigest()

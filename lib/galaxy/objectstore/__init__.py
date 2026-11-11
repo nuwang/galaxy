@@ -121,21 +121,17 @@ class CompletedPart(TypedDict):
 
 
 @dataclass(frozen=True)
-class PutUploadTarget:
-    """Upload the whole file with one PUT of exactly its size to ``url``."""
-
-    url: str
-
-
-@dataclass(frozen=True)
 class MultipartUploadTarget:
-    """PUT each part's byte range to its URL, then ``complete_upload`` with the parts as uploaded."""
+    """PUT each part's byte range to its URL, then ``complete_upload`` with the parts as uploaded.
+
+    Even a small file is a multipart upload, of one part: a presigned URL works until it expires, and
+    completing the upload is what stops its part URLs from writing the object.
+    """
 
     upload_id: str
     parts: list[UploadPart]
 
 
-UploadTarget = PutUploadTarget | MultipartUploadTarget
 # Upload URLs must outlive the whole upload: a large file's parts are uploaded in turn.
 DEFAULT_DIRECT_UPLOAD_EXPIRES_IN = 24 * 60 * 60
 
@@ -513,7 +509,7 @@ class ObjectStore(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def get_upload_target(
         self, obj, size: int, extra_dir=None, extra_dir_at_root=False, alt_name=None
-    ) -> UploadTarget | None:
+    ) -> MultipartUploadTarget | None:
         """Return how a client can upload a file of ``size`` bytes for `obj` straight to the backing store.
 
         Returns None unless the concrete store supports direct uploads *and* the admin has opted in via
@@ -950,7 +946,7 @@ class BaseObjectStore(ObjectStore):
 
     def get_upload_target(
         self, obj, size: int, extra_dir=None, extra_dir_at_root=False, alt_name=None
-    ) -> UploadTarget | None:
+    ) -> MultipartUploadTarget | None:
         return self._invoke(
             "get_upload_target",
             obj,
@@ -1177,12 +1173,12 @@ class ConcreteObjectStore(BaseObjectStore):
             obj, content_disposition=content_disposition, content_type=content_type, expires_in=expires_in, **kwargs
         )
 
-    def _get_upload_target(self, obj, size: int, **kwargs) -> UploadTarget | None:
+    def _get_upload_target(self, obj, size: int, **kwargs) -> MultipartUploadTarget | None:
         if not self.enable_direct_upload:
             return None
         return self._upload_target(obj, size, **kwargs)
 
-    def _upload_target(self, obj, size: int, **kwargs) -> UploadTarget | None:
+    def _upload_target(self, obj, size: int, **kwargs) -> MultipartUploadTarget | None:
         # Stores whose backend takes no direct uploads get this no-op default.
         return None
 
@@ -1672,7 +1668,7 @@ class NestedObjectStore(BaseObjectStore):
         """For the first backend that has this `obj`, get its URL."""
         return self._call_method("_get_object_url", obj, None, False, **kwargs)
 
-    def _get_upload_target(self, obj, size: int, **kwargs) -> UploadTarget | None:
+    def _get_upload_target(self, obj, size: int, **kwargs) -> MultipartUploadTarget | None:
         """Get an upload target from the backend that holds, or is to hold, this `obj`."""
         return self._call_method("_get_upload_target", obj, None, False, size=size, **kwargs)
 

@@ -40,7 +40,6 @@ from galaxy.objectstore import (
     MultipartUploadTarget,
     ObjectStoreAuth,
     persist_extra_files_for_dataset,
-    PutUploadTarget,
 )
 from galaxy.objectstore._caching_base import (
     RemoteDataStream,
@@ -991,9 +990,9 @@ def test_object_url_lasts_as_long_as_the_store_direct_downloads(config_str, expi
 MiB = 1024 * 1024
 GiB = 1024 * MiB
 BOTO3_DIRECT_UPLOAD_CONFIG_YAML = get_example("boto3_direct_upload.yml")
-BOTO3_DIRECT_UPLOAD_LARGE_THRESHOLD_CONFIG_YAML = BOTO3_DIRECT_UPLOAD_CONFIG_YAML + """
+BOTO3_DIRECT_UPLOAD_LARGE_CHUNK_CONFIG_YAML = BOTO3_DIRECT_UPLOAD_CONFIG_YAML + """
 transfer:
-  upload_multipart_threshold: 10737418240
+  upload_multipart_chunksize: 10737418240
 """
 DISTRIBUTED_DIRECT_UPLOAD_CONFIG_YAML = """
 type: distributed
@@ -1081,7 +1080,8 @@ def test_store_issuing_no_multipart_uploads_refuses_to_complete_one():
 
 
 @patch_object_stores_to_skip_initialize
-def test_upload_target_for_a_small_object_is_a_presigned_put_of_its_size():
+def test_upload_target_for_a_small_object_is_a_multipart_upload_of_one_part():
+    # Completing the upload retires its part URLs; a presigned PUT could replace the object until it expired.
     with TestConfig(BOTO3_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
         client = _mock_boto3_client(object_store)
         dataset = MockDataset(1)
@@ -1089,13 +1089,31 @@ def test_upload_target_for_a_small_object_is_a_presigned_put_of_its_size():
 
         target = object_store.get_upload_target(dataset, size=1024)
 
-        assert target == PutUploadTarget(url=f"https://s3.example.org/{key}")
+        assert target == MultipartUploadTarget(
+            upload_id="upload-1",
+            parts=[{"part_number": 1, "url": f"https://s3.example.org/{key}?part=1", "offset": 0, "size": 1024}],
+        )
         client.generate_presigned_url.assert_called_once_with(
-            ClientMethod="put_object",
-            Params={"Bucket": "unique_bucket_name_all_lowercase", "Key": key, "ContentLength": 1024},
+            ClientMethod="upload_part",
+            Params={
+                "Bucket": "unique_bucket_name_all_lowercase",
+                "Key": key,
+                "UploadId": "upload-1",
+                "PartNumber": 1,
+                "ContentLength": 1024,
+            },
             ExpiresIn=3600,
             HttpMethod="PUT",
         )
+
+
+@patch_object_stores_to_skip_initialize
+def test_empty_object_has_no_direct_upload_target():
+    # A part can't be empty: Galaxy takes the upload itself.
+    with TestConfig(BOTO3_DIRECT_UPLOAD_CONFIG_YAML) as (directory, object_store):
+        client = _mock_boto3_client(object_store)
+
+        assert object_store.get_upload_target(MockDataset(1), size=0) is None
         client.create_multipart_upload.assert_not_called()
 
 
@@ -1108,8 +1126,10 @@ def test_upload_target_addresses_a_file_stored_with_the_object():
 
         target = object_store.get_upload_target(dataset, size=3, **location)
 
-        assert isinstance(target, PutUploadTarget)
-        assert target.url == f"https://s3.example.org/{object_store._construct_path(dataset, **location)}"
+        assert isinstance(target, MultipartUploadTarget)
+        assert target.parts[0]["url"] == (
+            f"https://s3.example.org/{object_store._construct_path(dataset, **location)}?part=1"
+        )
 
 
 @patch_object_stores_to_skip_initialize
@@ -1161,12 +1181,14 @@ def test_multipart_upload_stays_within_the_s3_part_limit():
 
 
 @patch_object_stores_to_skip_initialize
-def test_single_put_never_exceeds_the_s3_object_limit():
-    with TestConfig(BOTO3_DIRECT_UPLOAD_LARGE_THRESHOLD_CONFIG_YAML) as (directory, object_store):
+def test_parts_never_exceed_the_s3_part_limit():
+    with TestConfig(BOTO3_DIRECT_UPLOAD_LARGE_CHUNK_CONFIG_YAML) as (directory, object_store):
         _mock_boto3_client(object_store)
 
-        assert isinstance(object_store.get_upload_target(MockDataset(1), size=5 * GiB), PutUploadTarget)
-        assert isinstance(object_store.get_upload_target(MockDataset(2), size=5 * GiB + 1), MultipartUploadTarget)
+        target = object_store.get_upload_target(MockDataset(1), size=5 * GiB + 1)
+
+        assert isinstance(target, MultipartUploadTarget)
+        assert [part["size"] for part in target.parts] == [5 * GiB, 1]
 
 
 @patch_object_stores_to_skip_initialize
@@ -1198,7 +1220,7 @@ def test_distributed_store_issues_upload_targets_from_the_objects_backend():
         in_s3, on_disk = MockDataset(1), MockDataset(2)
         in_s3.object_store_id, on_disk.object_store_id = "s3", "files"
 
-        assert isinstance(object_store.get_upload_target(in_s3, size=1024), PutUploadTarget)
+        assert isinstance(object_store.get_upload_target(in_s3, size=1024), MultipartUploadTarget)
         assert object_store.get_upload_target(on_disk, size=1024) is None
 
 
