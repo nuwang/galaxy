@@ -118,6 +118,7 @@ from galaxy.model.store.discover import (
     MaxDiscoveredFilesExceededError,
     OutputCollectionSecurityError,
 )
+from galaxy.model.store.job_import import check_job_import_dataset_uuids
 from galaxy.objectstore import (
     is_user_object_store,
     ObjectStorePopulator,
@@ -2487,6 +2488,8 @@ class MinimalJobWrapper(HasResourceParameters):
                     commit=False,
                 )
                 self._check_can_add_to_library_folders(job, import_model_store)
+                # The job wrote this store: it may not change its outputs' uuids or reuse another dataset's.
+                check_job_import_dataset_uuids(import_model_store, job)
                 object_import_tracker = import_model_store.perform_import(history=job.history, job=job)
                 # Datasets discovered by the job are created by the import, without permissions.
                 # Precreated outputs (hdas_by_id) got their permissions when the job was created.
