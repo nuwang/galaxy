@@ -1729,16 +1729,16 @@ wheels = [
 
 [[package]]
 name = "cloudbridge"
-version = "4.4.2"
+version = "4.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "pyeventsystem" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/3a/b9a42f3f7909966219ccd3a2b12dd2f4f0f9f1d2e38aa43984f7dcf88578/cloudbridge-4.4.2.tar.gz", hash = "sha256:890efed9414016c89e7a078b4fac90900cfd8e5aa02a9969490d66f8731b077a", size = 231328, upload-time = "2026-09-18T08:14:30.719Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/4f/adcb0d0b06c3ebe33c2fb5bc142edb195d578d0f76c126bf52cebfefde97/cloudbridge-4.5.0.tar.gz", hash = "sha256:c2579c2169590c3ae4ad3328fd236272745294800f5bfe08b96fbf7f04bad146", size = 243197, upload-time = "2026-11-11T17:30:38.318Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/af/4077be1ea52d69fb275c81e8aafed63534f17fcd748cb03e8d759add7c22/cloudbridge-4.4.2-py3-none-any.whl", hash = "sha256:525f5ded63b5d4583efed4ea62aa456f66d6a207e91b7d02136f802ab0219c59", size = 206946, upload-time = "2026-09-18T08:14:29.281Z" },
+    { url = "https://files.pythonhosted.org/packages/92/23/173d6a820ccba0535e5844178f4f7a025a5ebbcf9936e9587cd59037b837/cloudbridge-4.5.0-py3-none-any.whl", hash = "sha256:292c0a3dc6ea29d0e68f34862abad818a76dc33ad597193bdc981c982927d16d", size = 213137, upload-time = "2026-11-11T17:30:36.491Z" },
 ]
 
 [[package]]
@@ -3760,7 +3760,7 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'all'" },
     { name = "boto3", marker = "extra == 's3'" },
     { name = "boto3", marker = "extra == 'test'" },
-    { name = "cloudbridge", marker = "extra == 'test'", specifier = ">=4.4.2" },
+    { name = "cloudbridge", marker = "extra == 'test'", specifier = ">=4.5.0" },
     { name = "galaxy-util", extras = ["config-template"], editable = "packages/util" },
     { name = "pydantic", specifier = ">=2.7.4" },
     { name = "pytest", marker = "extra == 'test'" },
@@ -4849,7 +4849,7 @@ dev = [
     { name = "axe-selenium-python" },
     { name = "black" },
     { name = "boto3" },
-    { name = "cloudbridge", specifier = ">=4.4.2" },
+    { name = "cloudbridge", specifier = ">=4.5.0" },
     { name = "codespell" },
     { name = "cwltest", specifier = ">=2.5.20240906231108" },
     { name = "darker" },
@@ -4898,7 +4898,7 @@ test = [
     { name = "ase", specifier = ">=3.18.1" },
     { name = "axe-selenium-python" },
     { name = "boto3" },
-    { name = "cloudbridge", specifier = ">=4.4.2" },
+    { name = "cloudbridge", specifier = ">=4.5.0" },
     { name = "cwltest", specifier = ">=2.5.20240906231108" },
     { name = "fluent-logger" },
     { name = "gcsfs" },

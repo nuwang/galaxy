@@ -296,6 +296,7 @@ def __handle_metadata(
     config_file = metadata_kwds.get("config_file", None)
     datatypes_config = metadata_kwds.get("datatypes_config", None)
     compute_tmp_dir = metadata_kwds.get("compute_tmp_dir", None)
+    object_store_staging_directory = metadata_kwds.get("object_store_staging_directory", None)
     version_path = job_wrapper.job_io.version_path
     resolve_metadata_dependencies = job_wrapper.commands_in_new_shell
     metadata_command = (
@@ -309,6 +310,7 @@ def __handle_metadata(
             config_file=config_file,
             datatypes_config=datatypes_config,
             compute_tmp_dir=compute_tmp_dir,
+            object_store_staging_directory=object_store_staging_directory,
             compute_version_path=version_path,
             resolve_metadata_dependencies=resolve_metadata_dependencies,
             use_bin=job_wrapper.use_metadata_binary,

@@ -43,6 +43,7 @@ execution:
       jobs_directory: ${jobs_directory}
       remote_metadata: true
       remote_property_galaxy_home: ${galaxy_home}
+${extra_environment_params}
     local_environment:
       runner: local
 tools:
@@ -51,7 +52,7 @@ tools:
 """
 
 
-def _handle_galaxy_config_kwds(cls, config):
+def _handle_galaxy_config_kwds(cls, config, object_store_staging=None):
     amqp_url = os.environ.get("GALAXY_TEST_AMQP_URL", None)
     if amqp_url is None:
         pytest.skip("External AMQP URL not configured for test")
@@ -66,6 +67,7 @@ def _handle_galaxy_config_kwds(cls, config):
         amqp_key_prefix=f"pulsar_{uuid.uuid4().hex[:12]}_",
         jobs_directory=jobs_directory,
         galaxy_home=os.path.join(SCRIPT_DIRECTORY, os.pardir),
+        extra_environment_params=f"      object_store_staging: {object_store_staging}" if object_store_staging else "",
     )
     with tempfile.NamedTemporaryFile(suffix="_mq_job_conf.yml", mode="w", delete=False) as job_conf:
         job_conf.write(job_conf_str)
@@ -101,6 +103,48 @@ class TestEmbeddedMessageQueuePulsarExtendedMetadataPurge(TestEmbeddedMessageQue
     def handle_galaxy_config_kwds(cls, config):
         config["metadata_strategy"] = "extended"
         _handle_galaxy_config_kwds(cls, config)
+
+
+class TestEmbeddedMessageQueuePulsarOutputStaging(integration_util.IntegrationTestCase):
+    """Outputs leave the job through upload targets Galaxy issues (object_store_staging).
+
+    $ GALAXY_TEST_AMQP_URL='amqp://guest:guest@localhost:5672//' pytest -s test/integration/test_pulsar_embedded_mq.py
+    """
+
+    dataset_populator: DatasetPopulator
+    framework_tool_and_types = True
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.dataset_populator = DatasetPopulator(self.galaxy_interactor)
+
+    @classmethod
+    def handle_galaxy_config_kwds(cls, config):
+        config["metadata_strategy"] = "extended"
+        config["object_store_store_by"] = "uuid"
+        config["retry_metadata_internally"] = False
+        _handle_galaxy_config_kwds(cls, config, object_store_staging="stream")
+
+    def test_output_is_uploaded_to_its_target(self, history_id):
+        hda = self.dataset_populator.new_dataset(history_id, content="staged output\n", wait=True)
+        run = self.dataset_populator.run_tool("cat1", {"input1": {"src": "hda", "id": hda["id"]}}, history_id)
+        self.dataset_populator.wait_for_job(run["jobs"][0]["id"], assert_ok=True)
+        output = run["outputs"][0]
+        assert self.dataset_populator.get_history_dataset_content(history_id, dataset=output) == "staged output\n"
+
+    def test_composite_output_is_uploaded_to_its_targets(self):
+        self._run_tool_test("composite_output")
+
+    def test_tool_listing_another_dataset_for_upload_fails_and_leaves_it_alone(self, history_id):
+        other = self.dataset_populator.new_dataset(history_id, content="another dataset's content\n", wait=True)
+        other_uuid = self.dataset_populator.get_history_dataset_details(history_id, dataset=other)["uuid"]
+
+        run = self.dataset_populator.run_tool("forged_output_manifest", {"uuid": other_uuid}, history_id)
+        self.dataset_populator.wait_for_job(run["jobs"][0]["id"], assert_ok=False)
+
+        assert self.dataset_populator.get_job_details(run["jobs"][0]["id"]).json()["state"] == "error"
+        content = self.dataset_populator.get_history_dataset_content(history_id, dataset=other, wait=False)
+        assert content == "another dataset's content\n"
 
 
 class EmbeddedMessageQueuePulsarIntegrationInstance(integration_util.IntegrationInstance):
