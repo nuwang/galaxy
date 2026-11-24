@@ -76,6 +76,7 @@ class GalaxyDataTestConfig(Bunch):
         # objectstore config directories...
         self.jobs_directory = os.path.join(self.data_dir, "jobs_directory")
         self.new_file_path = os.path.join(self.data_dir, "tmp")
+        self.max_discovered_files = kwd.get("max_discovered_files", 10000)
         self.file_path = os.path.join(self.data_dir, "files")
         self.server_name = "main"
         self.enable_quotas = False

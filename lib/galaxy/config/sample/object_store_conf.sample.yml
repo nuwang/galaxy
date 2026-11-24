@@ -207,6 +207,12 @@ bucket:
 # Seconds a direct download URL stays valid. Revoking access in Galaxy doesn't revoke URLs already
 # handed out. Applies to every store type supporting enable_direct_download. Defaults to 3600.
 # direct_download_expires_in: 3600
+# Let remote jobs upload their outputs straight to this bucket through presigned URLs, instead of
+# through Galaxy. The bucket must be reachable from the compute nodes. Upload URLs last
+# direct_upload_expires_in seconds (default 86400). Give the bucket an AbortIncompleteMultipartUpload
+# lifecycle rule to clear uploads that never complete. Defaults to false.
+# enable_direct_upload: true
+# direct_upload_expires_in: 86400
 connection:  # not strictly needed but more of the API works with this.
   region: us-east-1
 transfer:
@@ -426,6 +432,11 @@ provider: aws
 # Redirect dataset downloads to a short-lived presigned URL instead of streaming
 # through Galaxy's cache. See the boto3 example above for the tradeoffs. Defaults to false.
 # enable_direct_download: true
+# Let remote jobs upload their outputs straight to the store, as for the boto3 example above, with
+# any provider. Until they expire, an azure upload URL can still replace a completed output, and an
+# openstack one can corrupt it. Defaults to false.
+# enable_direct_upload: true
+# direct_upload_expires_in: 86400
 auth:
   # Omit both keys to use the environment or the instance role instead.
   access_key: ...

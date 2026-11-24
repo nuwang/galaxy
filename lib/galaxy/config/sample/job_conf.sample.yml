@@ -950,6 +950,10 @@ execution:
        #   redirect: Galaxy redirects Pulsar (0.15.16 or later) to a presigned
        #             URL if the store has enable_direct_download set, and
        #             streams otherwise. Pulsar must be able to reach the store.
+       # With remote_metadata and the extended metadata strategy, Pulsar
+       # (0.16.4 or later) also uploads outputs without store credentials: to
+       # a presigned URL if the store has enable_direct_upload set, else
+       # through Galaxy. Outputs must then be stored by uuid.
        #object_store_staging: stream
 
        # The non-legacy Pulsar runners will attempt to resolve Galaxy
