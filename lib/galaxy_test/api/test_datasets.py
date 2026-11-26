@@ -318,7 +318,8 @@ class TestDatasetsApi(ApiTestCase):
         hda = self.dataset_populator.new_dataset(history_id, fetch_data=fetch_data, wait=True)
         show_response = self._get(f"datasets/{hda['id']}")
         self._assert_status_code_is(show_response, 200)
-        assert show_response.json()["permissions"] == {"manage": [role_id], "access": []}
+        # New users get private data by default, so the access role is the private role as well.
+        assert show_response.json()["permissions"] == {"manage": [role_id], "access": [role_id]}
 
     @requires_admin
     def test_admin_can_update_permissions(self, history_id):
